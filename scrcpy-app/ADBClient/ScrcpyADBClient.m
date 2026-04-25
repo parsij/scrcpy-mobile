@@ -64,12 +64,40 @@ void ScrcpySendKeycodeEvent(SDL_Scancode scancode, SDL_Keycode keycode, SDL_Keym
 
 void ScrcpyTryResetVideo(void) {
     static NSTimeInterval lastResetTime = 0;
-    if (NSDate.date.timeIntervalSince1970 - lastResetTime < 1.0) {
+    static int resetCountInWindow = 0;
+    static NSTimeInterval windowStartTime = 0;
+
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+
+    // Basic cooldown: at least 1 second between resets
+    if (now - lastResetTime < 1.0) {
         return;
     }
+
+    // Rate limiting: max 3 resets per 10 seconds to avoid excessive resets
+    // This prevents runaway reset loops in persistently problematic scenarios
+    if (now - windowStartTime > 10.0) {
+        // Start a new 10-second window
+        windowStartTime = now;
+        resetCountInWindow = 0;
+    }
+
+    if (resetCountInWindow >= 3) {
+        // Already hit the limit for this window, skip
+        static NSTimeInterval lastSkipLogTime = 0;
+        if (now - lastSkipLogTime > 5.0) {
+            NSLog(@"⏳ [Render] Reset rate limited, waiting for cooldown");
+            lastSkipLogTime = now;
+        }
+        return;
+    }
+
+    // Perform the reset
     ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL | KMOD_SHIFT);
-    NSLog(@"-> [1] Reset video by LCTRL+SHIFT+R");
-    lastResetTime = NSDate.date.timeIntervalSince1970;
+    resetCountInWindow++;
+    lastResetTime = now;
+
+    NSLog(@"🔄 [Render] Video reset requested (count in window: %d/3)", resetCountInWindow);
 }
 
 @interface ScrcpyADBClient () <ScrcpyClientProtocol>
@@ -241,6 +269,7 @@ void ScrcpyTryResetVideo(void) {
         @"powerOffOnClose": @"--power-off-on-close",
         @"noCleanup": @"--no-cleanup",
         @"forceAdbForward": @"--force-adb-forward",
+        @"displayId": @"--display-id",
     };
     return supportedOptions[key] ?: nil;
 }

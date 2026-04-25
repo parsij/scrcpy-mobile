@@ -303,6 +303,17 @@ struct SessionCreateView: View {
 
                         Toggle("Follow Remote Orientation Change", isOn: $sessionModel.adbOptions.followRemoteOrientation)
 
+                        if !startNewDisplay {
+                            HStack {
+                                Text("Display ID")
+                                Spacer()
+                                TextField("0", text: $sessionModel.adbOptions.displayId)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(maxWidth: 120)
+                            }
+                        }
+
                         Toggle("Start New Display", isOn: $startNewDisplay.animation())
                             .onChange(of: startNewDisplay) { newValue in
                                 sessionModel.adbOptions.startNewDisplay = newValue

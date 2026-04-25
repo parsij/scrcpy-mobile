@@ -138,6 +138,12 @@ struct ADBSessionOptions: Codable, Identifiable {
     var displayWidth: String = ""
     var displayHeight: String = ""
     var displayDPI: String = "240"
+
+    // Existing display selection (foldable / external secondary screens).
+    // Empty = default (display 0). Mapped to scrcpy's --display-id, which
+    // determines BOTH the captured video stream and the display that touch
+    // events are injected into.
+    var displayId: String = ""
     
     // 连接后关闭远程屏幕选项
     var turnScreenOff: Bool = true
@@ -186,6 +192,9 @@ struct ADBSessionOptions: Codable, Identifiable {
         self.displayWidth = try container.decodeIfPresent(String.self, forKey: .displayWidth) ?? ""
         self.displayHeight = try container.decodeIfPresent(String.self, forKey: .displayHeight) ?? ""
         self.displayDPI = try container.decodeIfPresent(String.self, forKey: .displayDPI) ?? "240"
+
+        // 解码已存在显示器 ID 选项（折叠屏/副屏），默认为空（主屏 0）
+        self.displayId = try container.decodeIfPresent(String.self, forKey: .displayId) ?? ""
         
         // 解码连接后关闭远程屏幕选项，默认为 true
         self.turnScreenOff = try container.decodeIfPresent(Bool.self, forKey: .turnScreenOff) ?? true
@@ -251,7 +260,12 @@ enum SessionDeviceType: String, Codable, CaseIterable {
             return host.replacingOccurrences(of: "vnc://", with: "").replacingOccurrences(of: "adb://", with: "")
         }
     }
-    
+
+    // Objective-C compatible accessor for hostReal
+    @objc var hostRealValue: String {
+        return hostReal
+    }
+
     var deviceType: SessionDeviceType {
         get {
             // If host has explicit scheme prefix, use it

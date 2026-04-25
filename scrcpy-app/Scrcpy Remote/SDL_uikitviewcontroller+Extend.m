@@ -8,6 +8,7 @@
 #import "SDL_uikitviewcontroller+Extend.h"
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
+#import <SDL2/SDL.h>
 #import <SDL2/SDL_events.h>
 #import <SDL2/SDL_system.h>
 #import "ScrcpyClientWrapper.h"
@@ -22,6 +23,9 @@
 
 // External notification name from ScrcpyRuntime
 extern NSString * const ScrcpyRemoteOrientationChangedNotification;
+
+// Track last known window size for Stage Manager detection
+static CGSize g_lastKnownViewSize = {0, 0};
 
 @interface SDL_uikitviewcontroller () <ScrcpyMenuViewDelegate>
 @property (nonatomic, assign)   NSInteger  homeIndicatorHidden;
@@ -125,18 +129,85 @@ static char orientationLockEnabledKey;
 - (void)viewWillLayoutSubviews
 {
     [super viewWillLayoutSubviews];
-    
+
     // Update video layer frame
     for (CALayer *layer in self.view.layer.sublayers) {
         if ([layer isKindOfClass:AVSampleBufferDisplayLayer.class]) {
             layer.frame = self.view.bounds;
         }
     }
-    
+
     // Update menu view layout if it exists
     if (self.menuView) {
         [self.menuView updateLayout];
     }
+
+    // Stage Manager fix: Notify SDL of window size changes
+    // This is critical for correct touch coordinate mapping in floating windows
+    [self notifySDLWindowSizeChangeIfNeeded];
+}
+
+#pragma mark - Stage Manager Window Size Fix
+
+- (void)notifySDLWindowSizeChangeIfNeeded {
+    [self notifySDLWindowSizeChangeForced:NO];
+}
+
+- (void)notifySDLWindowSizeChangeForced:(BOOL)force {
+    CGSize currentViewSize = self.view.bounds.size;
+
+    // Skip if size hasn't changed (unless forced — e.g. foreground re-activation
+    // in a floating window where iOS may have resized the SDL window in the
+    // background while our cached view size stayed identical).
+    if (!force && CGSizeEqualToSize(currentViewSize, g_lastKnownViewSize)) {
+        return;
+    }
+
+    // Skip invalid sizes
+    if (currentViewSize.width <= 0 || currentViewSize.height <= 0) {
+        return;
+    }
+
+    CGFloat scale = UIScreen.mainScreen.nativeScale;
+    int newWidth = (int)(currentViewSize.width * scale);
+    int newHeight = (int)(currentViewSize.height * scale);
+
+    // Get SDL window to compare sizes
+    SDL_Window *sdlWindow = SDL_GetKeyboardFocus();
+    if (!sdlWindow) {
+        sdlWindow = SDL_GetMouseFocus();
+    }
+
+    if (sdlWindow) {
+        int sdlWidth = 0, sdlHeight = 0;
+        SDL_GetWindowSize(sdlWindow, &sdlWidth, &sdlHeight);
+
+        // Check if SDL window size differs from actual view size
+        // This happens in Stage Manager where the floating window is smaller than SDL thinks
+        if (sdlWidth != newWidth || sdlHeight != newHeight) {
+            NSLog(@"📐 [StageManager] Window size mismatch detected - SDL: %dx%d, Actual: %dx%d",
+                  sdlWidth, sdlHeight, newWidth, newHeight);
+
+            // Push SDL window resize event to trigger scrcpy's coordinate recalculation
+            // This makes sc_screen_update_content_rect() recalculate the touch mapping rect
+            SDL_Event event;
+            SDL_memset(&event, 0, sizeof(event));
+            event.type = SDL_WINDOWEVENT;
+            event.window.event = SDL_WINDOWEVENT_SIZE_CHANGED;
+            event.window.data1 = newWidth;
+            event.window.data2 = newHeight;
+            event.window.windowID = SDL_GetWindowID(sdlWindow);
+            SDL_PushEvent(&event);
+
+            // Also push RESIZED event for complete handling
+            event.window.event = SDL_WINDOWEVENT_RESIZED;
+            SDL_PushEvent(&event);
+
+            NSLog(@"📐 [StageManager] Pushed SDL window resize events: %dx%d", newWidth, newHeight);
+        }
+    }
+
+    g_lastKnownViewSize = currentViewSize;
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -188,9 +259,55 @@ static char orientationLockEnabledKey;
                                                  name:ScrcpyStatusUpdatedNotificationName
                                                object:nil];
 
+    // Re-sync SDL window size when the app/scene returns to foreground.
+    // On iPad floating windows (Slide Over / Stage Manager) the system may
+    // resize the underlying SDL window while we are backgrounded (e.g. user
+    // pulls down Notification Center or switches apps). When we resume, our
+    // view bounds may equal the cached g_lastKnownViewSize so the normal
+    // layout-driven path short-circuits, leaving SDL's cached touch-mapping
+    // rect stale and producing drifted touch coordinates.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleAppDidBecomeActive:)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
+
+    if (@available(iOS 13.0, *)) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleSceneDidActivate:)
+                                                     name:UISceneDidActivateNotification
+                                                   object:nil];
+    }
+
     // Check if there's already a known remote orientation (frame arrived before viewDidAppear)
     // Apply it now since we missed the notification
     [self applyPendingRemoteOrientation];
+}
+
+#pragma mark - Foreground Re-activation
+
+- (void)handleAppDidBecomeActive:(NSNotification *)notification {
+    [self forceResyncSDLWindowSizeAfterForeground];
+}
+
+- (void)handleSceneDidActivate:(NSNotification *)notification {
+    if (@available(iOS 13.0, *)) {
+        UIScene *scene = notification.object;
+        // Only react to the scene that owns this view controller's window
+        if (scene && scene != self.view.window.windowScene) {
+            return;
+        }
+    }
+    [self forceResyncSDLWindowSizeAfterForeground];
+}
+
+- (void)forceResyncSDLWindowSizeAfterForeground {
+    // Trigger a layout pass so self.view.bounds reflects any size adjustment
+    // iOS may have applied while backgrounded, then force the SDL resync even
+    // if the cached size compares equal.
+    [self.view setNeedsLayout];
+    [self.view layoutIfNeeded];
+    [self notifySDLWindowSizeChangeForced:YES];
+    [self updateDisplayLayerFrame];
 }
 
 -(void)applyPendingRemoteOrientation {
