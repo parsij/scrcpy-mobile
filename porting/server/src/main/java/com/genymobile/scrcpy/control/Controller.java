@@ -217,7 +217,13 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
         boolean alive = true;
         while (!Thread.currentThread().isInterrupted() && alive) {
-            alive = handleEvent();
+            try {
+                alive = handleEvent();
+            } catch (RuntimeException e) {
+                // Mark: swallow per-event runtime exceptions (e.g. SecurityException from
+                // ClipboardService on some ROMs when running as root) to keep the session alive.
+                Ln.e("Controller handleEvent failed, continue", e);
+            }
         }
     }
 

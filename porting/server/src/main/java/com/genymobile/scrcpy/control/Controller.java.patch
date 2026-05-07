@@ -1,5 +1,5 @@
---- /Users/ethan/Src/github.com/scrcpy-mobile/porting/../scrcpy/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2025-11-23 15:02:15
-+++ /Users/ethan/Src/github.com/scrcpy-mobile/porting/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2025-11-23 15:26:53
+--- scrcpy/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2025-11-23 15:02:15
++++ porting/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2026-05-07 23:22:19
 @@ -91,6 +91,7 @@
      private final Object displayDataAvailable = new Object(); // condition variable
  
@@ -8,7 +8,22 @@
      private final PointersState pointersState = new PointersState();
      private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
      private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
-@@ -445,6 +446,7 @@
+@@ -216,7 +217,13 @@
+ 
+         boolean alive = true;
+         while (!Thread.currentThread().isInterrupted() && alive) {
+-            alive = handleEvent();
++            try {
++                alive = handleEvent();
++            } catch (RuntimeException e) {
++                // Mark: swallow per-event runtime exceptions (e.g. SecurityException from
++                // ClipboardService on some ROMs when running as root) to keep the session alive.
++                Ln.e("Controller handleEvent failed, continue", e);
++            }
+         }
+     }
+ 
+@@ -445,6 +452,7 @@
          if (pointerCount == 1) {
              if (action == MotionEvent.ACTION_DOWN) {
                  lastTouchDown = now;
@@ -16,7 +31,7 @@
              }
          } else {
              // secondary pointers must use ACTION_POINTER_* ORed with the pointerIndex
-@@ -511,8 +513,14 @@
+@@ -511,8 +519,14 @@
              }
          }
  
@@ -32,7 +47,7 @@
          return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
      }
  
-@@ -723,9 +731,7 @@
+@@ -723,9 +737,7 @@
                  if (timeout < 0) {
                      return null;
                  }

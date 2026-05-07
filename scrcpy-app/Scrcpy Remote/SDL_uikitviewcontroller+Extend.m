@@ -156,13 +156,6 @@ static char orientationLockEnabledKey;
 - (void)notifySDLWindowSizeChangeForced:(BOOL)force {
     CGSize currentViewSize = self.view.bounds.size;
 
-    // Skip if size hasn't changed (unless forced — e.g. foreground re-activation
-    // in a floating window where iOS may have resized the SDL window in the
-    // background while our cached view size stayed identical).
-    if (!force && CGSizeEqualToSize(currentViewSize, g_lastKnownViewSize)) {
-        return;
-    }
-
     // Skip invalid sizes
     if (currentViewSize.width <= 0 || currentViewSize.height <= 0) {
         return;
@@ -178,12 +171,22 @@ static char orientationLockEnabledKey;
         sdlWindow = SDL_GetMouseFocus();
     }
 
+    int sdlWidth = 0, sdlHeight = 0;
     if (sdlWindow) {
-        int sdlWidth = 0, sdlHeight = 0;
         SDL_GetWindowSize(sdlWindow, &sdlWidth, &sdlHeight);
+    }
 
-        // Check if SDL window size differs from actual view size
-        // This happens in Stage Manager where the floating window is smaller than SDL thinks
+    // Skip only when nothing has changed: view size matches cache AND SDL's
+    // own cached size already matches the actual pixel size. We must re-check
+    // SDL even if view bounds equal the cached value, because Slide Over
+    // hide/restore can leave SDL's coordinate-mapping rect stale without ever
+    // changing self.view.bounds.
+    BOOL sdlMatches = (sdlWindow && sdlWidth == newWidth && sdlHeight == newHeight);
+    if (!force && CGSizeEqualToSize(currentViewSize, g_lastKnownViewSize) && sdlMatches) {
+        return;
+    }
+
+    if (sdlWindow) {
         if (sdlWidth != newWidth || sdlHeight != newHeight) {
             NSLog(@"📐 [StageManager] Window size mismatch detected - SDL: %dx%d, Actual: %dx%d",
                   sdlWidth, sdlHeight, newWidth, newHeight);
@@ -276,7 +279,20 @@ static char orientationLockEnabledKey;
                                                  selector:@selector(handleSceneDidActivate:)
                                                      name:UISceneDidActivateNotification
                                                    object:nil];
+        // Slide Over hide-by-edge / restore does not always cycle through
+        // DidActivate; it may only emit WillEnterForeground on the scene.
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleSceneDidActivate:)
+                                                     name:UISceneWillEnterForegroundNotification
+                                                   object:nil];
     }
+
+    // Window-visibility transitions cover the case where Slide Over slides
+    // the window off-screen and back without changing scene activation state.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleAppDidBecomeActive:)
+                                                 name:UIWindowDidBecomeVisibleNotification
+                                               object:nil];
 
     // Check if there's already a known remote orientation (frame arrived before viewDidAppear)
     // Apply it now since we missed the notification
