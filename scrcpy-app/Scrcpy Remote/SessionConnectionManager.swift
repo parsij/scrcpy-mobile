@@ -128,7 +128,7 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     
     /// 后台断开连接计时器
     private var backgroundDisconnectTimer: Timer?
-    
+
     /// Live Activity 管理器
     private lazy var liveActivityManager: Any? = {
         if #available(iOS 16.1, *) {
@@ -137,6 +137,9 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             return nil
         }
     }()
+
+    /// 用于存储上次连接会话的 UserDefaults key
+    private let lastSessionKey = "session_connection_manager.last_session"
     
     override private init() {
         super.init()
@@ -193,16 +196,19 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             case ScrcpyStatusSDLWindowAppeared:
                 print("✅ [SessionConnectionManager] Status: SDL Window Appeared")
                 self.isConnecting = false
-                
+
                 // 记录连接开始时间
                 if self.connectionStartTime == nil {
                     self.connectionStartTime = Date()
                     print("⏰ [SessionConnectionManager] Connection start time recorded: \(self.connectionStartTime!)")
                 }
-                
+
+                // 连接成功后,如果启用了自动重连,保存当前会话
+                self.saveCurrentSessionIfAutoReconnectEnabled()
+
                 // 执行待执行的动作
                 self.executePendingActionIfNeeded()
-                
+
                 // 连接成功后，延迟清理回调以避免 ConnectionStatusView 在后台运行
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.cleanupCallbacksAfterSuccess()
@@ -211,19 +217,22 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             case ScrcpyStatusSDLWindowCreated:
                 print("✅ [SessionConnectionManager] Status: SDL Window Created")
                 self.isConnecting = false
-                
+
                 // 记录连接开始时间
                 if self.connectionStartTime == nil {
                     self.connectionStartTime = Date()
                     print("⏰ [SessionConnectionManager] Connection start time recorded: \(self.connectionStartTime!)")
                 }
-                
+
+                // 连接成功后,如果启用了自动重连,保存当前会话
+                self.saveCurrentSessionIfAutoReconnectEnabled()
+
                 // 延迟执行待执行的动作，确保界面完全显示
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     print("⏰ [SessionConnectionManager] Window created delay completed, executing pending action")
                     self.executePendingActionIfNeeded()
                 }
-                
+
                 // 连接成功后，延迟清理回调以避免 ConnectionStatusView 在后台运行
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     self.cleanupCallbacksAfterSuccess()
@@ -274,11 +283,42 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     }
     
     @objc private func handleApplicationDidEnterBackground() {
+        print("📱 [SessionConnectionManager] ========================================")
         print("📱 [SessionConnectionManager] Application did enter background")
-        
+        print("📱 [SessionConnectionManager] ========================================")
+
+        // 打印当前连接状态
+        print("📊 [SessionConnectionManager] Current connection status:")
+        print("   - Connection status: \(connectionStatus.description)")
+        print("   - Is active: \(connectionStatus.isActive)")
+        print("   - Is connecting: \(isConnecting)")
+        print("   - Current session: \(currentSession?.sessionName ?? "nil")")
+
+        // 如果启用了自动重连并且当前有活跃连接，保存当前会话
+        let autoReconnectEnabled = UserDefaults.standard.bool(forKey: "settings.auto_reconnect.enabled")
+        print("⚙️ [SessionConnectionManager] Auto reconnect enabled: \(autoReconnectEnabled)")
+
+        if autoReconnectEnabled && connectionStatus.isActive, let session = currentSession {
+            print("💾 [SessionConnectionManager] Re-saving current session on background...")
+            print("   - Session name: \(session.sessionName)")
+            print("   - Session host: \(session.hostReal)")
+            print("   - Session port: \(session.port)")
+            print("   - Device type: \(session.deviceType.rawValue)")
+            saveLastSession(session)
+            print("✅ [SessionConnectionManager] Session re-saved on background (backup)")
+        } else {
+            if !autoReconnectEnabled {
+                print("⏭️ [SessionConnectionManager] Auto reconnect is disabled, skipping session save")
+            } else if !connectionStatus.isActive {
+                print("⏭️ [SessionConnectionManager] No active connection, skipping session save")
+            } else {
+                print("⏭️ [SessionConnectionManager] No current session, skipping session save")
+            }
+        }
+
         // 如果当前有活跃连接，启动 Live Activity
         startLiveActivityIfNeeded()
-        
+
         // 若无活跃连接但仍存在旧的 Live Activity，则停止它，避免卡住
         if #available(iOS 16.1, *),
            let manager = liveActivityManager as? ScrcpyLiveActivityManager,
@@ -290,12 +330,34 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
 
         // 启动后台断开计时器
         startBackgroundDisconnectTimer()
+
+        print("📱 [SessionConnectionManager] ========================================")
+        print("📱 [SessionConnectionManager] Background handling completed")
+        print("📱 [SessionConnectionManager] ========================================")
     }
-    
+
     @objc private func handleApplicationDidBecomeActive() {
+        print("📱 [SessionConnectionManager] ========================================")
         print("📱 [SessionConnectionManager] Application did become active")
+        print("📱 [SessionConnectionManager] ========================================")
+
+        // 打印当前连接状态
+        print("📊 [SessionConnectionManager] Current connection status:")
+        print("   - Connection status: \(connectionStatus.description)")
+        print("   - Is active: \(connectionStatus.isActive)")
+        print("   - Is connecting: \(isConnecting)")
+        print("   - Current session: \(currentSession?.sessionName ?? "nil")")
+
         // 取消后台断开计时器
         stopBackgroundDisconnectTimer()
+
+        // 检查是否需要自动重连
+        print("🔍 [SessionConnectionManager] Checking if auto reconnect is needed...")
+        attemptAutoReconnectIfNeeded()
+
+        print("📱 [SessionConnectionManager] ========================================")
+        print("📱 [SessionConnectionManager] Foreground handling completed")
+        print("📱 [SessionConnectionManager] ========================================")
     }
 
     // MARK: - Background Task Management
@@ -645,7 +707,7 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
         let wasConnected = currentSession != nil
         let previousHost = actualHost
         let previousPort = actualPort
-        
+
         currentSession = nil
         actualHost = nil
         actualPort = nil
@@ -654,7 +716,11 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
         connectionStatus = ScrcpyStatusDisconnected
         isConnecting = false
         connectionStartTime = nil
-        
+
+        // 当没有已连接的session时,清除保存的上次连接session
+        // 避免下次重连了上次成功过但已经主动断开过的连接
+        clearLastSession()
+
         // 清理待执行的动作（如果需要）
         if clearPendingAction {
             pendingAction = nil
@@ -667,24 +733,24 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
         } else {
             print("💾 [SessionConnectionManager] Pending action preserved for reconnection")
         }
-        
+
         // 清理 ScrcpyClientWrapper 实例
         scrcpyClientWrapper = nil
-        
+
         // 停止 Live Activity
         if #available(iOS 16.1, *),
            let manager = liveActivityManager as? ScrcpyLiveActivityManager {
             manager.stopActivity()
         }
-        
+
         // 保留状态回调，立即清除
         currentConnectionCallback = nil
-        
+
         // 延迟清除错误回调，确保用户能看到可能的错误消息
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             self.currentErrorCallback = nil
         }
-        
+
         if wasConnected {
             print("🧹 [SessionConnectionManager] Session cleared - was connected to \(previousHost ?? "unknown"):\(previousPort ?? "unknown")")
             print("⏰ [SessionConnectionManager] Connection time cleared")
@@ -1554,4 +1620,160 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             }
         }
     }
-} 
+
+    // MARK: - Auto Reconnect Methods
+
+    /// 保存当前会话(如果启用了自动重连)
+    private func saveCurrentSessionIfAutoReconnectEnabled() {
+        let autoReconnectEnabled = UserDefaults.standard.bool(forKey: "settings.auto_reconnect.enabled")
+        guard autoReconnectEnabled else {
+            print("ℹ️ [SessionConnectionManager] Auto reconnect disabled, skip saving session on connect")
+            return
+        }
+
+        guard let session = currentSession else {
+            print("⚠️ [SessionConnectionManager] No current session to save on connect")
+            return
+        }
+
+        print("💾 [SessionConnectionManager] Connection successful, saving session for auto-reconnect...")
+        print("   - Session name: \(session.sessionName)")
+        print("   - Session host: \(session.hostReal)")
+        print("   - Session port: \(session.port)")
+        print("   - Device type: \(session.deviceType.rawValue)")
+        saveLastSession(session)
+    }
+
+    /// 保存上次连接的会话到 UserDefaults
+    /// - Parameter session: 要保存的会话
+    private func saveLastSession(_ session: ScrcpySessionModel) {
+        do {
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(session)
+            UserDefaults.standard.set(data, forKey: lastSessionKey)
+            print("✅ [SessionConnectionManager] Last session saved successfully to UserDefaults")
+        } catch {
+            print("❌ [SessionConnectionManager] Failed to save last session: \(error)")
+        }
+    }
+
+    /// 从 UserDefaults 恢复上次连接的会话
+    /// - Returns: 上次连接的会话,如果不存在或解析失败则返回 nil
+    private func loadLastSession() -> ScrcpySessionModel? {
+        guard let data = UserDefaults.standard.data(forKey: lastSessionKey) else {
+            print("ℹ️ [SessionConnectionManager] No saved last session found")
+            return nil
+        }
+
+        do {
+            let decoder = JSONDecoder()
+            let session = try decoder.decode(ScrcpySessionModel.self, from: data)
+            print("📂 [SessionConnectionManager] Last session loaded successfully: \(session.sessionName)")
+            return session
+        } catch {
+            print("❌ [SessionConnectionManager] Failed to load last session: \(error)")
+            return nil
+        }
+    }
+
+    /// 清除保存的上次连接会话
+    private func clearLastSession() {
+        UserDefaults.standard.removeObject(forKey: lastSessionKey)
+        print("🧹 [SessionConnectionManager] Last session cleared")
+    }
+
+    /// 尝试自动重连(如果需要)
+    private func attemptAutoReconnectIfNeeded() {
+        print("🔍 [SessionConnectionManager] --- Auto Reconnect Check Start ---")
+
+        // 检查是否有待处理的 URL scheme,如果有则优先处理 URL scheme
+        if AppSchemeManagerV2.shared.pendingScheme != nil {
+            print("⏭️ [SessionConnectionManager] URL scheme is pending, skipping auto reconnect")
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+            return
+        }
+
+        // 检查是否启用了自动重连
+        let autoReconnectEnabled = UserDefaults.standard.bool(forKey: "settings.auto_reconnect.enabled")
+        print("⚙️ [SessionConnectionManager] Auto reconnect setting: \(autoReconnectEnabled)")
+
+        guard autoReconnectEnabled else {
+            print("⏭️ [SessionConnectionManager] Auto reconnect is disabled, skipping")
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+            return
+        }
+
+        // 如果当前已经有活跃连接,不需要重连
+        print("📊 [SessionConnectionManager] Checking current connection state...")
+        print("   - Is active: \(connectionStatus.isActive)")
+        print("   - Is connecting: \(isConnecting)")
+
+        guard !connectionStatus.isActive else {
+            print("✅ [SessionConnectionManager] Already connected, no need to reconnect")
+            print("🧹 [SessionConnectionManager] Clearing saved session to avoid duplicate")
+            clearLastSession()
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+            return
+        }
+
+        // 如果正在连接中,不尝试重连
+        guard !isConnecting else {
+            print("🔄 [SessionConnectionManager] Already connecting, skip auto reconnect")
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+            return
+        }
+
+        // 尝试加载上次保存的会话
+        print("📂 [SessionConnectionManager] Loading saved session...")
+        guard let lastSession = loadLastSession() else {
+            print("ℹ️ [SessionConnectionManager] No saved session found, nothing to reconnect")
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+            return
+        }
+
+        print("✅ [SessionConnectionManager] Found saved session to reconnect:")
+        print("   - Session name: \(lastSession.sessionName)")
+        print("   - Session host: \(lastSession.hostReal)")
+        print("   - Session port: \(lastSession.port)")
+        print("   - Device type: \(lastSession.deviceType.rawValue)")
+        print("⏰ [SessionConnectionManager] Will attempt reconnect after 0.5 second delay...")
+
+        // 延迟一小段时间再重连,避免在应用启动过程中立即连接
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+
+            print("⏰ [SessionConnectionManager] Delay completed, rechecking connection state...")
+
+            // 再次检查连接状态,确保在延迟期间没有建立连接
+            guard !self.connectionStatus.isActive && !self.isConnecting else {
+                print("✅ [SessionConnectionManager] Connection already established during delay")
+                print("🧹 [SessionConnectionManager] Clearing saved session")
+                self.clearLastSession()
+                print("🔍 [SessionConnectionManager] --- Auto Reconnect Attempt Cancelled ---")
+                return
+            }
+
+            print("🚀 [SessionConnectionManager] Starting auto reconnect...")
+            print("🔍 [SessionConnectionManager] --- Auto Reconnect Check End ---")
+
+            // 执行自动重连
+            self.connectToSession(lastSession,
+                statusCallback: { status, message, isConnecting in
+                    print("🔄 [SessionConnectionManager] Auto reconnect status update:")
+                    print("   - Status: \(status.description)")
+                    print("   - Is connecting: \(isConnecting)")
+                    if let msg = message {
+                        print("   - Message: \(msg)")
+                    }
+                },
+                errorCallback: { title, message in
+                    print("❌ [SessionConnectionManager] Auto reconnect failed:")
+                    print("   - Title: \(title)")
+                    print("   - Message: \(message)")
+                    print("🧹 [SessionConnectionManager] Clearing saved session after failure")
+                    self.clearLastSession()
+                }
+            )
+        }
+    }
+}

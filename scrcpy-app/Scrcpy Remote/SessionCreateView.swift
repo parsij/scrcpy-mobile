@@ -289,7 +289,13 @@ struct SessionCreateView: View {
                                     sessionModel.adbOptions.volumeScale = newValue
                                 }
                         }
-                        Toggle("Enable Clipboard Sync", isOn: $sessionModel.adbOptions.enableClipboardSync)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Enable Clipboard Sync", isOn: $sessionModel.adbOptions.enableClipboardSync)
+                            Text("Disable on rooted devices or custom ROMs if the connection drops immediately after connect (clipboard SecurityException).")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         
                         Toggle("Turn Remote Screen Off After Connected", isOn: $sessionModel.adbOptions.turnScreenOff)
                         

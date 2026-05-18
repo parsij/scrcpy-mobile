@@ -187,6 +187,10 @@ class AppSettings: ObservableObject {
     @AppStorage("settings.live_activity.enabled")
     var liveActivityEnabled: Bool = true
 
+    // Auto reconnect setting
+    @AppStorage("settings.auto_reconnect.enabled")
+    var autoReconnectEnabled: Bool = false
+
     // Send Files Default Path setting
     @AppStorage("settings.send_files.default_path")
     var sendFilesDefaultPath: String = "/sdcard/Download"
@@ -278,7 +282,9 @@ struct SettingsView: View {
                             Text($0.rawValue).tag($0)
                         }
                     }
-                    
+
+                    Toggle(NSLocalizedString("Auto Reconnect When Foregrounded", comment: "Auto reconnect setting"), isOn: $appSettings.autoReconnectEnabled)
+
                     if #available(iOS 16.1, *) {
                         Toggle("Live Activity in Dynamic Island", isOn: $appSettings.liveActivityEnabled)
                         
@@ -1734,8 +1740,9 @@ struct ADBKeysManagementView: View {
     @State private var statusMessage: String = ""
     @State private var statusIsError: Bool = false
     @State private var showingExportPicker: Bool = false
+    @State private var showingImportPicker: Bool = false
     @State private var showingGenerateAlert: Bool = false
-    
+
     let adbClient = ADBClient.shared()
     
     var body: some View {
@@ -1817,7 +1824,17 @@ struct ADBKeysManagementView: View {
                     }
                 }
                 .disabled(isLoading)
-                
+
+                Button(action: {
+                    showingImportPicker = true
+                }) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                        Text("Import Keys")
+                    }
+                }
+                .disabled(isLoading)
+
                 Button(action: {
                     showingExportPicker = true
                 }) {
@@ -1827,7 +1844,7 @@ struct ADBKeysManagementView: View {
                     }
                 }
                 .disabled(isLoading || !adbClient.adbKeyPairExists())
-                
+
                 Button(action: {
                     showingGenerateAlert = true
                 }) {
@@ -1855,6 +1872,20 @@ struct ADBKeysManagementView: View {
         .navigationBarTitle("ADB Keys Management", displayMode: .inline)
         .onAppear {
             loadKeys()
+        }
+        .fileImporter(
+            isPresented: $showingImportPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importKeys(from: url)
+                }
+            case .failure(let error):
+                setStatus("Import failed: \(error.localizedDescription)", isError: true)
+            }
         }
         .fileExporter(
             isPresented: $showingExportPicker,
@@ -1932,13 +1963,13 @@ struct ADBKeysManagementView: View {
     
     private func exportKeys(to url: URL) {
         isLoading = true
-        
+
         DispatchQueue.global(qos: .userInitiated).async {
             let success = adbClient.exportADBKeys(toDirectory: url.path)
-            
+
             DispatchQueue.main.async {
                 self.isLoading = false
-                
+
                 if success {
                     self.setStatus("ADB keys exported successfully to \(url.lastPathComponent)", isError: false)
                 } else {
@@ -1947,7 +1978,35 @@ struct ADBKeysManagementView: View {
             }
         }
     }
-    
+
+    private func importKeys(from url: URL) {
+        isLoading = true
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Start accessing security-scoped resource
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessed {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let success = adbClient.importADBKeys(fromDirectory: url.path)
+
+            DispatchQueue.main.async {
+                self.isLoading = false
+
+                if success {
+                    self.setStatus("ADB keys imported successfully from \(url.lastPathComponent)", isError: false)
+                    // Reload the keys after import
+                    self.loadKeys()
+                } else {
+                    self.setStatus("Failed to import ADB keys. Make sure the folder contains both 'adbkey' and 'adbkey.pub' files.", isError: true)
+                }
+            }
+        }
+    }
+
     private func generateNewKeys() {
         isLoading = true
         

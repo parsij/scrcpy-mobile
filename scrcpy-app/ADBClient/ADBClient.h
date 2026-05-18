@@ -55,6 +55,7 @@ typedef void (^ADBClientCallback)(NSString * _Nullable output, int returnCode);
 - (BOOL)writeADBPublicKey:(NSString *)publicKey;
 - (BOOL)generateNewADBKeyPair;
 - (BOOL)exportADBKeysToDirectory:(NSString *)directoryPath;
+- (BOOL)importADBKeysFromDirectory:(NSString *)directoryPath;
 - (BOOL)adbKeyPairExists;
 
 @end

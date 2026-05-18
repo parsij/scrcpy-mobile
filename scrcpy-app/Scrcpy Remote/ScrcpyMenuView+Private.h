@@ -92,6 +92,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateButtonLayout;
 - (void)toggleMenuExpansion;
 
+// Fit Device Window Size
+- (void)showFitDeviceWindowConfirmation;
+- (void)fitDeviceWindowSize;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -35,6 +35,13 @@ static BOOL lastWasLandscape = NO;
 // Notification name for remote orientation change
 NSString * const ScrcpyRemoteOrientationChangedNotification = @"ScrcpyRemoteOrientationChangedNotification";
 
+// Render recovery statistics
+static int g_consecutiveDropCount = 0;
+static int g_totalDropCount = 0;
+static CFAbsoluteTime g_lastRecoveryTime = 0;
+static const int kMaxConsecutiveDropsBeforeRecovery = 5;  // Trigger recovery after this many consecutive drops
+static const CFAbsoluteTime kRecoveryCooldownSeconds = 1.0;  // Minimum time between recovery attempts
+
 const char *ScrcpyCoreVersion(void)
 {
     return SCRCPY_VERSION;
@@ -183,42 +190,96 @@ void RenderPixelBufferFrame(CVPixelBufferRef pixelBuffer) {
         int frameHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
         CheckAndNotifyOrientationChange(frameWidth, frameHeight);
 
+        // Get rendering layer first to check its status
+        AVSampleBufferDisplayLayer *displayLayer = GetSampleBufferDisplayLayer();
+        if (!displayLayer) {
+            return;
+        }
+
+        // Check 1: Handle render failure status
+        AVQueuedSampleBufferRenderingStatus status = displayLayer.status;
+        if (status == AVQueuedSampleBufferRenderingStatusFailed) {
+            NSError *error = displayLayer.error;
+            NSLog(@"⚠️ [Render] Display layer failed: %@", error.localizedDescription);
+
+            [displayLayer flush];
+
+            // Request video reset with cooldown to avoid spam
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (now - g_lastRecoveryTime > kRecoveryCooldownSeconds) {
+                NSLog(@"🔄 [Render] Requesting video reset after failure");
+                ScrcpyTryResetVideo();
+                g_lastRecoveryTime = now;
+            }
+            return;  // Skip this frame, wait for recovery
+        }
+
+        // Check 2: Handle buffer full (decoder overload in high-contrast scenes)
+        if (!displayLayer.isReadyForMoreMediaData) {
+            g_consecutiveDropCount++;
+            g_totalDropCount++;
+
+            // Log periodically to avoid spam
+            if (g_consecutiveDropCount == 1 || g_consecutiveDropCount % 30 == 0) {
+                NSLog(@"⚠️ [Render] Buffer full, dropped %d frames (total: %d)",
+                      g_consecutiveDropCount, g_totalDropCount);
+            }
+
+            // Too many consecutive drops indicate decoder cannot keep up
+            if (g_consecutiveDropCount >= kMaxConsecutiveDropsBeforeRecovery) {
+                CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+                if (now - g_lastRecoveryTime > kRecoveryCooldownSeconds) {
+                    NSLog(@"🔄 [Render] Too many dropped frames (%d), requesting recovery",
+                          g_consecutiveDropCount);
+                    [displayLayer flush];
+                    ScrcpyTryResetVideo();
+                    g_lastRecoveryTime = now;
+                    g_consecutiveDropCount = 0;
+                }
+            }
+            return;  // Skip this frame
+        }
+
+        // Reset consecutive drop count on successful buffer availability
+        g_consecutiveDropCount = 0;
+
+        // Create sample buffer for rendering
         CMSampleTimingInfo timing = {kCMTimeInvalid, kCMTimeInvalid, kCMTimeInvalid};
         CMVideoFormatDescriptionRef videoInfo = NULL;
         OSStatus result = CMVideoFormatDescriptionCreateForImageBuffer(NULL, pixelBuffer, &videoInfo);
-        
-        CMSampleBufferRef sampleBuffer = NULL;
-        result = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, videoInfo, &timing, &sampleBuffer);
-        
-        if (sampleBuffer == NULL) {
+
+        if (result != noErr || videoInfo == NULL) {
+            NSLog(@"❌ [Render] Failed to create video format description: %d", (int)result);
             return;
         }
-        
+
+        CMSampleBufferRef sampleBuffer = NULL;
+        result = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, videoInfo, &timing, &sampleBuffer);
+
+        if (sampleBuffer == NULL) {
+            CFRelease(videoInfo);
+            return;
+        }
+
         CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, YES);
         CFMutableDictionaryRef dict = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
         CFDictionarySetValue(dict, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
-        
-        // Get rendering layer
-        AVSampleBufferDisplayLayer *displayLayer = GetSampleBufferDisplayLayer();
-        
-        // render sampleBuffer now
+
+        // Render the sample buffer
         if (@available(iOS 17.0, *)) {
             [displayLayer.sampleBufferRenderer enqueueSampleBuffer:sampleBuffer];
         } else {
             [displayLayer enqueueSampleBuffer:sampleBuffer];
         }
 
-        // After become forground from background, may render fail
+        // Post-render check: handle any failure that occurred during enqueue
         if (displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+            NSLog(@"⚠️ [Render] Render failed after enqueue, flushing");
             [displayLayer flush];
-            NSLog(@"Render failed, flush display layer");
         }
-        
+
         CFRelease(videoInfo);
         CFRelease(sampleBuffer);
-        
-        sampleBuffer = NULL;
-        dict = NULL;
     }
 }
 

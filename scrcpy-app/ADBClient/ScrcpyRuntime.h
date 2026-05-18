@@ -23,3 +23,7 @@ void ResetScrcpyOrientationTracking(void);
 // Also returns frame dimensions via out parameters (pass NULL if not needed)
 BOOL GetCurrentRemoteOrientation(int *outWidth, int *outHeight);
 BOOL IsRemoteOrientationKnown(void);
+
+// Request video reset (sends Ctrl+Shift+R to scrcpy to request a new keyframe)
+// Used for recovering from render failures or decoder overload
+void ScrcpyTryResetVideo(void);

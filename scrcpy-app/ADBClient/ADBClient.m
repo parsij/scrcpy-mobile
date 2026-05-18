@@ -419,13 +419,92 @@ void adb_connect_status_updated(const char *serial, const char *status)
     return YES;
 }
 
+- (BOOL)importADBKeysFromDirectory:(NSString *)directoryPath
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    NSError *error;
+
+    NSString *privateKeySource = [directoryPath stringByAppendingPathComponent:@"adbkey"];
+    NSString *publicKeySource = [directoryPath stringByAppendingPathComponent:@"adbkey.pub"];
+
+    // Check if both key files exist in source directory
+    if (![fileManager fileExistsAtPath:privateKeySource]) {
+        NSLog(@"Private key file does not exist at: %@", privateKeySource);
+        return NO;
+    }
+
+    if (![fileManager fileExistsAtPath:publicKeySource]) {
+        NSLog(@"Public key file does not exist at: %@", publicKeySource);
+        return NO;
+    }
+
+    // Ensure .android directory exists
+    if (![self ensureADBAndroidDirectoryExists]) {
+        return NO;
+    }
+
+    NSString *androidDir = [self getADBAndroidDirectory];
+    NSString *privateKeyDest = [androidDir stringByAppendingPathComponent:@"adbkey"];
+    NSString *publicKeyDest = [androidDir stringByAppendingPathComponent:@"adbkey.pub"];
+
+    // Remove existing keys if present
+    if ([fileManager fileExistsAtPath:privateKeyDest]) {
+        [fileManager removeItemAtPath:privateKeyDest error:&error];
+        if (error) {
+            NSLog(@"Error removing existing private key: %@", error.localizedDescription);
+            return NO;
+        }
+    }
+
+    if ([fileManager fileExistsAtPath:publicKeyDest]) {
+        [fileManager removeItemAtPath:publicKeyDest error:&error];
+        if (error) {
+            NSLog(@"Error removing existing public key: %@", error.localizedDescription);
+            return NO;
+        }
+    }
+
+    // Import private key
+    BOOL success = [fileManager copyItemAtPath:privateKeySource toPath:privateKeyDest error:&error];
+    if (!success) {
+        NSLog(@"Error importing private key: %@", error.localizedDescription);
+        return NO;
+    }
+
+    // Set proper file permissions for private key (0600 - read/write for owner only)
+    NSDictionary *privateKeyAttributes = @{NSFilePosixPermissions: @(0600)};
+    [fileManager setAttributes:privateKeyAttributes ofItemAtPath:privateKeyDest error:&error];
+    if (error) {
+        NSLog(@"Warning: Could not set file permissions for private key: %@", error.localizedDescription);
+    }
+
+    // Import public key
+    success = [fileManager copyItemAtPath:publicKeySource toPath:publicKeyDest error:&error];
+    if (!success) {
+        NSLog(@"Error importing public key: %@", error.localizedDescription);
+        // Clean up private key since import failed
+        [fileManager removeItemAtPath:privateKeyDest error:nil];
+        return NO;
+    }
+
+    // Set proper file permissions for public key (0644 - read/write for owner, read for others)
+    NSDictionary *publicKeyAttributes = @{NSFilePosixPermissions: @(0644)};
+    [fileManager setAttributes:publicKeyAttributes ofItemAtPath:publicKeyDest error:&error];
+    if (error) {
+        NSLog(@"Warning: Could not set file permissions for public key: %@", error.localizedDescription);
+    }
+
+    NSLog(@"ADB keys imported successfully from: %@", directoryPath);
+    return YES;
+}
+
 - (BOOL)adbKeyPairExists
 {
     NSFileManager *fileManager = [NSFileManager defaultManager];
     NSString *androidDir = [self getADBAndroidDirectory];
     NSString *privateKeyPath = [androidDir stringByAppendingPathComponent:@"adbkey"];
     NSString *publicKeyPath = [androidDir stringByAppendingPathComponent:@"adbkey.pub"];
-    
+
     return [fileManager fileExistsAtPath:privateKeyPath] && [fileManager fileExistsAtPath:publicKeyPath];
 }
 
