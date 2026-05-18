@@ -126,6 +126,13 @@
 - F11 全屏，MOD+q 退出
 - 断线显示 disconnect icon 2s 后再关窗
 
+## 已知差异（不阻塞升级）
+
+- **scrcpy-server 二进制体积**：v3.3.4 ≈ 91 KB，v4.0 ≈ 732 KB（约 8×）。
+  - 原因：v4.0 `server/build.gradle` 移除了 `proguardFiles getDefaultProguardFile(...)`；产物里现在带 `META-INF/`、Kotlin 运行时 `kotlin_builtins`、`AndroidManifest.xml`、`resources.arsc`，而 v3.3.4 是裁剪得很干净的 classes.dex。
+  - 影响：每次连接 push 多约 0.6 秒（取决于 USB/Wi-Fi），Android 侧解 dex 时间略增。
+  - 不在本仓库 patch 范围（应到上游修），先观察是否在 v4.0.x 后续小版本被收敛。
+
 ## 分阶段执行索引
 
 详见 task 列表（TaskList），Phase 0 → Phase 5。

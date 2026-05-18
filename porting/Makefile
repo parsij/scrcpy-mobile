@@ -40,7 +40,7 @@ scrcpy: scrcpy-config mkdir-output
 
 scrcpy-server:
 	set -x && \
-	export SCRCPY_VERSION=3.3.4 && \
+	export SCRCPY_VERSION=4.0 && \
 	export ANDROID_SDK_ROOT=~/Library/Android/sdk && \
 	export JAVA_HOME="/opt/homebrew/opt/openjdk@17" && \
 	export PATH="$$JAVA_HOME/bin:$$PATH" && \
