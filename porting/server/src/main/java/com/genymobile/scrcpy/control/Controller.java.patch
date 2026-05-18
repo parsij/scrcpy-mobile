@@ -1,14 +1,14 @@
---- scrcpy/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2025-11-23 15:02:15
-+++ porting/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2026-05-07 23:22:19
-@@ -91,6 +91,7 @@
+--- /var/folders/hr/xw76b5ps73n6t_4n674pt1qc0000gn/T/tmp.WXHNkZY3Z2	2026-05-18 17:11:20
++++ /Users/ethan/Src/github.com/scrcpy-mobile/porting/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2026-05-18 17:11:07
+@@ -101,6 +101,7 @@
      private final Object displayDataAvailable = new Object(); // condition variable
  
      private long lastTouchDown;
-+    private long lastTouchCont;  // Mark: add property lastTouchCont to make touch event smooth
++    private long lastTouchCont;  // Mark: smooth event time for primary-touch path
      private final PointersState pointersState = new PointersState();
      private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
      private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
-@@ -216,7 +217,13 @@
+@@ -241,7 +242,13 @@
  
          boolean alive = true;
          while (!Thread.currentThread().isInterrupted() && alive) {
@@ -16,14 +16,14 @@
 +            try {
 +                alive = handleEvent();
 +            } catch (RuntimeException e) {
-+                // Mark: swallow per-event runtime exceptions (e.g. SecurityException from
-+                // ClipboardService on some ROMs when running as root) to keep the session alive.
++                // Mark: swallow per-event runtime exceptions to keep the session alive
++                // (e.g. SecurityException from ClipboardService on some rooted ROMs).
 +                Ln.e("Controller handleEvent failed, continue", e);
 +            }
          }
      }
  
-@@ -445,6 +452,7 @@
+@@ -544,6 +551,7 @@
          if (pointerCount == 1) {
              if (action == MotionEvent.ACTION_DOWN) {
                  lastTouchDown = now;
@@ -31,14 +31,14 @@
              }
          } else {
              // secondary pointers must use ACTION_POINTER_* ORed with the pointerIndex
-@@ -511,8 +519,14 @@
+@@ -610,8 +618,14 @@
              }
          }
  
 -        MotionEvent event = MotionEvent.obtain(lastTouchDown, now, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
 +        MotionEvent event = MotionEvent.obtain(lastTouchDown, lastTouchCont, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
                  DEFAULT_DEVICE_ID, 0, source, 0);
-+        // Mark: make touch duration under 18ms to make touch event smooth
++        // Mark: keep inter-event delta near a 60 Hz tick to smooth fast move bursts
 +        if (now - lastTouchCont <= 18) {
 +            lastTouchCont = now;
 +        } else {
@@ -47,7 +47,7 @@
          return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
      }
  
-@@ -723,9 +737,7 @@
+@@ -839,9 +853,7 @@
                  if (timeout < 0) {
                      return null;
                  }
