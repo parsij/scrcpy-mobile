@@ -126,6 +126,25 @@
 - F11 全屏，MOD+q 退出
 - 断线显示 disconnect icon 2s 后再关窗
 
+## 依赖升级实施笔记
+
+### FFmpeg 6.0 → 8.1.1（Phase 2.1）
+
+- branch / tag：`release/6.0` → `n8.1.1`
+- `./configure` 选项完全兼容；trial 单 ABI（iphoneos-arm64）干净构建通过，全套 7 个静态库 + 头都齐。
+- `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
+- porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
+
+### SDL2 2.32.8 → SDL3 3.4.8（Phase 2.2）
+
+- SDL3 仍保留 `Xcode/SDL/SDL.xcodeproj`，但**只剩 framework 产物**（`PBXNativeTarget "SDL3"`, productType=framework），没有 "Static Library-iOS" scheme。
+- 当前架构是静态库 + 大量 ObjC category hack 到 SDL 内部 `SDL_uikitviewcontroller`，不能用 framework（dyld load 时类是只读的，hack 不到内部 ivar / 私有方法）。
+- 改走 **CMake + iOS toolchain**：SDL3 CMakeLists 已有 `option(SDL_STATIC ...)`（CMakeLists.txt:398）。计划用 `cmake -G Xcode -DSDL_STATIC=ON -DSDL_SHARED=OFF` 之类配置三个 ABI 出 libSDL3.a。
+- 旧 patch 三处复盘：
+  - `SDL_UpdateCommandGeneration` 注入（在 SDL_render.c 末尾追加自定义函数）— SDL3 render 命令缓冲机制重写，**待 Phase 3.2 重做 hijack 时再决定**是否需要等价物。
+  - `ENABLE_GCKEYBOARD / ENABLE_GCMOUSE` 宏 sed 删除 — SDL3 已无此宏，改用 `SDL_InitGCKeyboard()` 函数路径；**先不带此 patch**，跑通后看是否仍干扰触摸。
+  - `UITouchTypeIndirectPointer` 屏蔽 — SDL3 该常量仍在 `SDL_uikitview.m:109`，**保留**该 patch。
+
 ## 已知差异（不阻塞升级）
 
 - **scrcpy-server 二进制体积**：v3.3.4 ≈ 91 KB，v4.0 ≈ 732 KB（约 8×）。

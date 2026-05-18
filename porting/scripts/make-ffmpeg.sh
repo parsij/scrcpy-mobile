@@ -15,15 +15,18 @@ echo "Cleaning previous source..."
 [[ -d "$BUILD_DIR/ffmpeg-iphonesimulator-x86_64" ]] && rm -rf "$BUILD_DIR/ffmpeg-iphonesimulator-x86_64"
 
 echo "Downloading FFmpeg source code..."
-git clone --depth 1 --branch release/6.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg-source
+git clone --depth 1 --branch n8.1.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-source
 cd ffmpeg-source || exit;
 
 # Apply patch to h264_slice.c
+# Force VideoToolbox HW accel even when the bitstream advertises colorspace=RGB
+# (some Android encoders mis-report this and cause FFmpeg to skip VT and fall
+#  back to software decoding, which is too slow on iPad for high-res streams).
 echo "Applying patch to h264_slice.c..."
 cat > h264_patch.diff << 'EOF'
 --- a/libavcodec/h264_slice.c
 +++ b/libavcodec/h264_slice.c
-@@ -799,7 +799,7 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
+@@ -811,7 +811,7 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
          break;
      case 10:
  #if CONFIG_H264_VIDEOTOOLBOX_HWACCEL
@@ -31,8 +34,8 @@ cat > h264_patch.diff << 'EOF'
 +        // if (h->avctx->colorspace != AVCOL_SPC_RGB)
              *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
  #endif
-         if (CHROMA444(h)) {
-@@ -842,7 +842,7 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
+ #if CONFIG_H264_VULKAN_HWACCEL
+@@ -873,7 +873,7 @@ static enum AVPixelFormat get_pixel_format(H264Context *h, int force_callback)
          *fmt++ = AV_PIX_FMT_CUDA;
  #endif
  #if CONFIG_H264_VIDEOTOOLBOX_HWACCEL
