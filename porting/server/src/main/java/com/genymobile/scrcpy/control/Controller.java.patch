@@ -1,14 +1,6 @@
---- /var/folders/hr/xw76b5ps73n6t_4n674pt1qc0000gn/T/tmp.WXHNkZY3Z2	2026-05-18 17:11:20
-+++ /Users/ethan/Src/github.com/scrcpy-mobile/porting/server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2026-05-18 17:11:07
-@@ -101,6 +101,7 @@
-     private final Object displayDataAvailable = new Object(); // condition variable
- 
-     private long lastTouchDown;
-+    private long lastTouchCont;  // Mark: smooth event time for primary-touch path
-     private final PointersState pointersState = new PointersState();
-     private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
-     private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
-@@ -241,7 +242,13 @@
+--- /var/folders/hr/xw76b5ps73n6t_4n674pt1qc0000gn/T/tmp.NBMWW0h8G6	2026-05-22 23:25:10
++++ server/src/main/java/com/genymobile/scrcpy/control/Controller.java	2026-05-22 23:25:01
+@@ -241,7 +241,13 @@
  
          boolean alive = true;
          while (!Thread.currentThread().isInterrupted() && alive) {
@@ -23,31 +15,7 @@
          }
      }
  
-@@ -544,6 +551,7 @@
-         if (pointerCount == 1) {
-             if (action == MotionEvent.ACTION_DOWN) {
-                 lastTouchDown = now;
-+                lastTouchCont = now;
-             }
-         } else {
-             // secondary pointers must use ACTION_POINTER_* ORed with the pointerIndex
-@@ -610,8 +618,14 @@
-             }
-         }
- 
--        MotionEvent event = MotionEvent.obtain(lastTouchDown, now, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
-+        MotionEvent event = MotionEvent.obtain(lastTouchDown, lastTouchCont, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
-                 DEFAULT_DEVICE_ID, 0, source, 0);
-+        // Mark: keep inter-event delta near a 60 Hz tick to smooth fast move bursts
-+        if (now - lastTouchCont <= 18) {
-+            lastTouchCont = now;
-+        } else {
-+            lastTouchCont += 16.666;
-+        }
-         return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
-     }
- 
-@@ -839,9 +853,7 @@
+@@ -839,9 +845,7 @@
                  if (timeout < 0) {
                      return null;
                  }

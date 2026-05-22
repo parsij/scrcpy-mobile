@@ -101,7 +101,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final Object displayDataAvailable = new Object(); // condition variable
 
     private long lastTouchDown;
-    private long lastTouchCont;  // Mark: smooth event time for primary-touch path
     private final PointersState pointersState = new PointersState();
     private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
     private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
@@ -551,7 +550,6 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (pointerCount == 1) {
             if (action == MotionEvent.ACTION_DOWN) {
                 lastTouchDown = now;
-                lastTouchCont = now;
             }
         } else {
             // secondary pointers must use ACTION_POINTER_* ORed with the pointerIndex
@@ -618,14 +616,8 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             }
         }
 
-        MotionEvent event = MotionEvent.obtain(lastTouchDown, lastTouchCont, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
+        MotionEvent event = MotionEvent.obtain(lastTouchDown, now, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
                 DEFAULT_DEVICE_ID, 0, source, 0);
-        // Mark: keep inter-event delta near a 60 Hz tick to smooth fast move bursts
-        if (now - lastTouchCont <= 18) {
-            lastTouchCont = now;
-        } else {
-            lastTouchCont += 16.666;
-        }
         return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
     }
 
