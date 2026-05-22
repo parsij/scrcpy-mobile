@@ -815,10 +815,10 @@
 				MARKETING_VERSION = 4.4.4;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
-						"-lSDL3",
-						"-framework",
-						CoreBluetooth,
-						"-ObjC",
+					"-lSDL3",
+					"-framework",
+					CoreBluetooth,
+					"-ObjC",
 					"-lscrcpy",
 					"-ltsnet-forwarder",
 					"-lavfilter",
@@ -877,10 +877,10 @@
 				MARKETING_VERSION = 4.4.4;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
-						"-lSDL3",
-						"-framework",
-						CoreBluetooth,
-						"-ObjC",
+					"-lSDL3",
+					"-framework",
+					CoreBluetooth,
+					"-ObjC",
 					"-lscrcpy",
 					"-ltsnet-forwarder",
 					"-lavfilter",
@@ -977,7 +977,6 @@
 					CoreMedia,
 					"-framework",
 					VideoToolbox,
-					"-ObjC",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mobile.VNCClient;
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
@@ -1032,7 +1031,6 @@
 					CoreMedia,
 					"-framework",
 					VideoToolbox,
-					"-ObjC",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mobile.VNCClient;
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";

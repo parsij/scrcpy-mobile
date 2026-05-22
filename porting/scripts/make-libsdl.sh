@@ -23,14 +23,32 @@ cd "$BUILD_DIR";
 rm -rf SDL-source
 git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git SDL-source
 
-# Disable the iOS UITouchTypeIndirectPointer recognizer path so SDL falls
-# back to plain touch handling — same intent as the original SDL2 patch,
-# the constant still exists in SDL3 at the same site (src/video/uikit/
-# SDL_uikitview.m around line 109).
-sdl_uikitview=$(ls SDL-source/src/video/uikit/SDL_uikitview.m)
-sed -e 's/UITouchTypeIndirectPointer/UITouchTypeIndirectPointer+1000/g' \
-    "$sdl_uikitview" > "$sdl_uikitview.replaced"
-mv -v "$sdl_uikitview.replaced" "$sdl_uikitview"
+# Disable the iOS UITouchTypeIndirectPointer recognizer/interaction path so
+# SDL3 falls back to plain touch handling. This is the same intent as the
+# original SDL2 patch, but the SDL3 site is different: SDL3 creates both a
+# UIPointerInteraction and a UIHoverGestureRecognizer wrapped in an
+# `if (@available(iOS 13.4, *))` block. The SDL2-style sed of
+# `UITouchTypeIndirectPointer -> UITouchTypeIndirectPointer+1000`
+# survives the recognizer-creation line but then trips
+# `-[UIHoverGestureRecognizer setAllowedTouchTypes:]`'s strict validator
+# (UITouchType in (0..3)) at runtime with a fatal NSException.
+# Replace the entire `if (@available(iOS 13.4, *)) { ... }` block with a
+# no-op so the indirect-pointer path is never set up.
+python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("SDL-source/src/video/uikit/SDL_uikitview.m")
+src = p.read_text()
+pattern = re.compile(
+    r"if \(@available\(iOS 13\.4, \*\)\) \{\s*"
+    r"indirectPointerInteraction = \[\[UIPointerInteraction[^}]*?"
+    r"indirectPointerRecognizer\.allowedTouchTypes = @\[@\(UITouchTypeIndirectPointer\)\];\s*"
+    r"\[self addGestureRecognizer:indirectPointerRecognizer\];\s*\}",
+    re.DOTALL,
+)
+new = pattern.sub("/* scrcpy-mobile: indirect-pointer path disabled */", src, count=1)
+assert new != src, "patch site not found"
+p.write_text(new)
+PY
 
 # NOTE: dropped two SDL2-era patches that no longer apply:
 #  - SDL_UpdateCommandGeneration injection in SDL_render.c — SDL3 already
