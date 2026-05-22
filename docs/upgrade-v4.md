@@ -135,6 +135,21 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### ADBClient option map: v4.0 新 flag 入表（Phase 4.2）
+
+在 `ScrcpyADBClient.m::optionArgumentKeyMapping` 增加 v4.0 新增 CLI flag 的反向映射（key → `--flag-name`），便于将来 UI 暴露 / 现在通过 customFlags 转发：
+
+- `keepActive` → `--keep-active`
+- `backgroundColor` → `--background-color`
+- `flexDisplay` → `--flex-display`
+- `noWindowAspectRatioLock` → `--no-window-aspect-ratio-lock`
+- `renderFit` → `--render-fit`
+- `minSizeAlignment` → `--min-size-alignment`
+- `cameraTorch` → `--camera-torch`
+- `cameraZoom` → `--camera-zoom`
+
+刻意没在 `SessionManager.swift::ADBSessionOptions` 和 `SessionCreateView.swift` 加 UI 字段（保持本次升级的最小补丁面）。用户需要立即试用时可走 customFlags，UI 字段按需补。
+
 ### iOS app SDL2→SDL3 sweep（Phase 4.1）
 
 仓库范围内所有 ObjC/C 源（不含 build/ 中间产物）做了 SDL3 迁移。涉及：

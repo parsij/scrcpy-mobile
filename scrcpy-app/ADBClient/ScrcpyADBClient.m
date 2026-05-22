@@ -262,6 +262,15 @@ void ScrcpyTryResetVideo(void) {
         @"noCleanup": @"--no-cleanup",
         @"forceAdbForward": @"--force-adb-forward",
         @"displayId": @"--display-id",
+        // v4.0 new flags
+        @"keepActive": @"--keep-active",
+        @"backgroundColor": @"--background-color",
+        @"flexDisplay": @"--flex-display",
+        @"noWindowAspectRatioLock": @"--no-window-aspect-ratio-lock",
+        @"renderFit": @"--render-fit",
+        @"minSizeAlignment": @"--min-size-alignment",
+        @"cameraTorch": @"--camera-torch",
+        @"cameraZoom": @"--camera-zoom",
     };
     return supportedOptions[key] ?: nil;
 }
