@@ -14,7 +14,7 @@
 typedef GLfloat GLdouble;
 typedef double GLclampd;
 
-#include <SDL2/SDL_opengl_glext.h>
+#include <SDL3/SDL_opengl_glext.h>
 
 // Define NDEBUG will define assert -> (void)0, see assert.h
 // This will prevent to_fixed_point_16 crashed

@@ -135,6 +135,27 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### display / screen / util/sdl / texture porting 重写（Phase 3.2）
+
+display.c 在 v4.0 被删除，其逻辑拆入了 `screen.c` 与新增的 `texture.c` / `util/sdl.c`。
+
+- 删除 `porting/src/display-porting.c`（display.c 不存在了）。
+- 新增 `porting/src/texture-porting.c`：通过 `#define SDL_UpdateYUVTexture` 宏 hijack 拦截硬解路径的 YUV 上传（与旧版一致），返回类型改为 SDL3 的 `bool`。
+- 新增 `porting/src/util-sdl-porting.c`：`util/sdl.c` 把 `SDL_CreateWindow` / `SDL_RenderPresent` 包成 `sc_sdl_create_window` / `sc_sdl_render_present`，所以 hijack 点下移。
+  - 用 `_orig` 重命名模式（不是 `_hijack`）把 sdl.c 中的同名定义改名，外部重新定义同名函数实现 hijack；hijack 内部转发到 `_orig`。
+  - 硬解路径的 `sc_sdl_render_present` 不再调 `SDL_UpdateCommandGeneration`（SDL2 时代的私有 helper，SDL3 上由内部 FlushRenderCommands 自动 ++），改调公开的 `SDL_FlushRenderer(renderer)` 让命令队列推进，避免后续 `SDL_DestroyTexture` 时积压泄漏。
+- 重写 `porting/src/screen-porting.c`：
+  - `#include <SDL2/SDL.h>` → `<SDL3/SDL.h>`。
+  - `SDL_RenderSetScale` → `SDL_SetRenderScale`。
+  - `screen->display.renderer` → `screen->renderer`（v4.0 把 `sc_display` 字段扁平化到 `sc_screen`）。
+  - `SDL_CLIPBOARDUPDATE` → `SDL_EVENT_CLIPBOARD_UPDATE`。
+  - `sc_screen_handle_event` 返回 `void`（v4.0 改了），参数变 `const SDL_Event *`。
+  - `SDL_CreateWindow` hijack 移出到 util-sdl-porting（screen.c 不再直接调）。
+  - `SDL_DestroyWindow` hijack 保留；`SDL_SetWindowFullscreen` 参数变 `bool`。
+- `porting/include/porting.h` 中 `#include <SDL2/SDL_opengl_glext.h>` → `<SDL3/SDL_opengl_glext.h>`（被 cmake `-include porting.h` 强制注入每个 TU）。
+- `porting/cmake/CMakeLists.txt`：去除 `display-porting.c`；加入 `disconnect.c`、`sdl_hints.c`、`util/command.c`；将 `texture.c` / `util/sdl.c` 替换为对应的 porting 文件。
+- 验证：iphoneos/arm64 单 ABI build 中 screen-porting / texture-porting / util-sdl-porting 三个 TU 全部编译通过；剩余 build 错误集中在 `scrcpy-porting.c` 的 SDL3 事件 / SDL_Init 签名问题，属 Phase 3.3 范围。
+
 ### scrcpy client 源切到 v4.0（Phase 3.1）
 
 - `scrcpy` submodule pointer 升到 tag `v4.0`（commit 2322868）。

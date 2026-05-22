@@ -7,10 +7,17 @@ add_library( # Sets the name of the library.
         scrcpy
         # Sets the library as a shared library.
         STATIC
-        # Sources of scrcpy v3.0.2
+        # Sources of scrcpy v4.0
         ../../scrcpy/app/src/control_msg.c
-        # ../../scrcpy/app/src/display.c
-        ../src/display-porting.c
+        # display.c was removed in v4.0 (folded into screen.c + texture.c);
+        # the porting equivalents now live in screen-porting.c / texture-porting.c.
+        ../../scrcpy/app/src/disconnect.c
+        ../../scrcpy/app/src/sdl_hints.c
+        # ../../scrcpy/app/src/texture.c — hijacked
+        ../src/texture-porting.c
+        # ../../scrcpy/app/src/util/sdl.c — hijacked
+        ../src/util-sdl-porting.c
+        ../../scrcpy/app/src/util/command.c
         ../../scrcpy/app/src/uhid/gamepad_uhid.c
         ../../scrcpy/app/src/uhid/mouse_uhid.c
         ../../scrcpy/app/src/uhid/keyboard_uhid.c
