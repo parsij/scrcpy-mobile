@@ -17,15 +17,14 @@
 
 - (UIWindow *)getSDLWindow {
     // Try to get window through SDL
+    // SDL3 replaced SDL_GetWindowWMInfo with the per-window properties bag.
     SDL_Window *sdlWindow = SDL_GetMouseFocus();
     if (sdlWindow) {
-        SDL_SysWMinfo info;
-        SDL_VERSION(&info.version);
-        if (SDL_GetWindowWMInfo(sdlWindow, &info)) {
-            UIWindow *uiWindow = info.info.uikit.window;
-            if (uiWindow) {
-                return uiWindow;
-            }
+        SDL_PropertiesID props = SDL_GetWindowProperties(sdlWindow);
+        UIWindow *uiWindow = (__bridge UIWindow *)
+            SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+        if (uiWindow) {
+            return uiWindow;
         }
     }
 

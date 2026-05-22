@@ -623,17 +623,17 @@ static char orientationLockEnabledKey;
 
 - (void)didTapBackButton {
     // 发送 Back 按键事件 (Ctrl+B)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_B, SDLK_b, SDL_KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_B, SDLK_B, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapHomeButton {
     // 发送 Home 按键事件 (Ctrl+H)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_H, SDLK_h, SDL_KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_H, SDLK_H, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapSwitchButton {
     // 发送 Switch 按键事件 (Ctrl+S)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_S, SDLK_s, SDL_KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_S, SDLK_S, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapKeyboardButton {

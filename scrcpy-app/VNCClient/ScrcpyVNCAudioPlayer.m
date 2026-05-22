@@ -57,7 +57,7 @@
 @property (nonatomic, assign) int ringBufferReadPos;
 @property (nonatomic, assign) int ringBufferWritePos;
 @property (nonatomic, assign) int ringBufferAvailable;
-@property (nonatomic, assign) SDL_mutex *ringBufferMutex;
+@property (nonatomic, assign) SDL_Mutex *ringBufferMutex;
 
 // Volume
 @property (nonatomic, assign) float volume;

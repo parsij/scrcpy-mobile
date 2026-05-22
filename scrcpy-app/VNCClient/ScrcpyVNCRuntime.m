@@ -191,8 +191,14 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
     }
     
     // 释放旧surface并创建新的
-    SDL_FreeSurface(rfbClientGetClientData(client, SDL_Init));
-    SDL_Surface* sdl = SDL_CreateRGBSurface(0, width, height, depth, 0, 0, 0, 0);
+    // SDL3: SDL_CreateRGBSurface(flags, w, h, depth, Rmask, Gmask, Bmask, Amask)
+    // is gone; use SDL_CreateSurface(w, h, format). Pick a packed pixel format
+    // matching the requested depth.
+    SDL_DestroySurface(rfbClientGetClientData(client, SDL_Init));
+    SDL_PixelFormat pf = (depth == 32) ? SDL_PIXELFORMAT_ARGB8888
+                                       : (depth == 24) ? SDL_PIXELFORMAT_RGB24
+                                                       : SDL_PIXELFORMAT_RGB565;
+    SDL_Surface* sdl = SDL_CreateSurface(width, height, pf);
     if (!sdl) {
         rfbClientErr("resize: error creating surface: %s\n", SDL_GetError());
         return FALSE;
@@ -203,25 +209,30 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
     client->frameBuffer = sdl->pixels;
 
     // 设置像素格式
+    // SDL3: surface->format is now an SDL_PixelFormat enum, not a pointer to
+    // SDL_PixelFormatDetails. Get the shift/mask info via
+    // SDL_GetPixelFormatDetails().
+    const SDL_PixelFormatDetails *pfd = SDL_GetPixelFormatDetails(sdl->format);
     client->format.bitsPerPixel = depth;
-    client->format.redShift = sdl->format->Rshift;
-    client->format.greenShift = sdl->format->Gshift;
-    client->format.blueShift = sdl->format->Bshift;
-    client->format.redMax = sdl->format->Rmask >> client->format.redShift;
-    client->format.greenMax = sdl->format->Gmask >> client->format.greenShift;
-    client->format.blueMax = sdl->format->Bmask >> client->format.blueShift;
+    client->format.redShift = pfd ? pfd->Rshift : 0;
+    client->format.greenShift = pfd ? pfd->Gshift : 0;
+    client->format.blueShift = pfd ? pfd->Bshift : 0;
+    client->format.redMax = pfd ? (pfd->Rmask >> client->format.redShift) : 0;
+    client->format.greenMax = pfd ? (pfd->Gmask >> client->format.greenShift) : 0;
+    client->format.blueMax = pfd ? (pfd->Bmask >> client->format.blueShift) : 0;
     
     CustomSetFormatAndEncodings(client);
 
     // 获取设备屏幕尺寸（考虑Retina缩放）
-    int screenWidth, screenHeight;
-    SDL_DisplayMode displayMode;
-    SDL_GetCurrentDisplayMode(0, &displayMode);
-    
-    NSLog(@"[VNCScreenDebug] SDL DisplayMode: %dx%d", displayMode.w, displayMode.h);
-    
-    screenWidth = (int)displayMode.w;
-    screenHeight = (int)displayMode.h;
+    // SDL3: SDL_GetCurrentDisplayMode(displayID) returns a pointer.
+    int screenWidth = 0, screenHeight = 0;
+    SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+    const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(primary);
+    if (dm) {
+        NSLog(@"[VNCScreenDebug] SDL DisplayMode: %dx%d", dm->w, dm->h);
+        screenWidth = dm->w;
+        screenHeight = dm->h;
+    }
     
     NSLog(@"[VNCScreenDebug] Final screen size: %dx%d", screenWidth, screenHeight);
     NSLog(@"[VNCScreenDebug] Remote screen size: %dx%d", width, height);
@@ -239,10 +250,9 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
     NSLog(@"[VNCScreenDebug] Scaled remote size: %dx%d", scaledWidth, scaledHeight);
     
     // 创建全屏窗口（使用设备屏幕尺寸）
-    int sdlFlags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_FULLSCREEN;
+    // SDL3: SDL_CreateWindow signature dropped the x/y args.
+    int sdlFlags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN;
     *sdlWindow = SDL_CreateWindow(client->desktopName,
-                                  SDL_WINDOWPOS_UNDEFINED,
-                                  SDL_WINDOWPOS_UNDEFINED,
                                   screenWidth,
                                   screenHeight,
                                   sdlFlags);
@@ -281,7 +291,9 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
         return FALSE;
     }
     SDL_SetRenderVSync(*sdlRenderer, 1);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    // SDL3 removed SDL_HINT_RENDER_SCALE_QUALITY; texture filtering is
+    // configured per-texture via SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_LINEAR)
+    // at creation time, which the cursor texture below already does.
     
     // 获取设备缩放因子并设置SDL渲染器缩放
     float deviceScale = UIScreen.mainScreen.nativeScale;
@@ -413,11 +425,15 @@ static inline void VNCRuntimeFinishedFrameBufferUpdate(rfbClient* cl, SDL_Textur
     int windowWidth, windowHeight;
     SDL_GetWindowSize(sdlWindow, &windowWidth, &windowHeight);
 
-    int textureWidth, textureHeight;
-    SDL_QueryTexture(sdlTexture, NULL, NULL, &textureWidth, &textureHeight);
+    // SDL3: SDL_QueryTexture is gone; read .w / .h directly off the texture.
+    int textureWidth = sdlTexture ? sdlTexture->w : 0;
+    int textureHeight = sdlTexture ? sdlTexture->h : 0;
 
-    int logicalWidth, logicalHeight;
-    SDL_RenderGetLogicalSize(sdlRenderer, &logicalWidth, &logicalHeight);
+    // SDL3: SDL_RenderGetLogicalSize -> SDL_GetRenderLogicalPresentation
+    // returns w/h plus the presentation mode.
+    int logicalWidth = 0, logicalHeight = 0;
+    SDL_RendererLogicalPresentation logicalMode = SDL_LOGICAL_PRESENTATION_DISABLED;
+    SDL_GetRenderLogicalPresentation(sdlRenderer, &logicalWidth, &logicalHeight, &logicalMode);
 
     int renderWidth = logicalWidth > 0 ? logicalWidth : windowWidth;
     int renderHeight = logicalHeight > 0 ? logicalHeight : windowHeight;
@@ -711,16 +727,22 @@ static CustomCursor* createCustomCursor(SDL_Renderer* renderer) {
     if (!cursor) return NULL;
     
     // 创建光标纹理
-    SDL_Surface* surface = SDL_CreateRGBSurface(0, CURSOR_TEXTURE_SIZE, CURSOR_TEXTURE_SIZE, 32, 
-        0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
-    
+    // SDL3: explicit RGBA masks are no longer required; pick a known
+    // packed format. SDL_CreateSurface takes (w, h, format).
+    SDL_Surface* surface = SDL_CreateSurface(CURSOR_TEXTURE_SIZE,
+                                             CURSOR_TEXTURE_SIZE,
+                                             SDL_PIXELFORMAT_ARGB8888);
+
     if (!surface) {
         free(cursor);
         return NULL;
     }
-    
+
+    // SDL3: SDL_MapRGBA takes (format_details, palette, r, g, b, a).
+    const SDL_PixelFormatDetails *cursorPfd = SDL_GetPixelFormatDetails(surface->format);
+
     // 清空背景（透明）
-    SDL_FillRect(surface, NULL, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+    SDL_FillSurfaceRect(surface, NULL, SDL_MapRGBA(cursorPfd, NULL, 0, 0, 0, 0));
     
     Uint32* pixels = (Uint32*)surface->pixels;
     const int size = CURSOR_TEXTURE_SIZE;
@@ -779,12 +801,12 @@ static CustomCursor* createCustomCursor(SDL_Renderer* renderer) {
                 // 黑色圆心
                 int alpha = (int)(255 * totalAlpha);
                 if (alpha > 255) alpha = 255;
-                pixels[y * size + x] = SDL_MapRGBA(surface->format, 0, 0, 0, alpha);
+                pixels[y * size + x] = SDL_MapRGBA(cursorPfd, NULL, 0, 0, 0, alpha);
             } else if (totalWhiteAlpha > 0.0f) {
                 // 白色边框
                 int alpha = (int)(200 * totalWhiteAlpha); // 稍微降低白色边框的不透明度
                 if (alpha > 200) alpha = 200;
-                pixels[y * size + x] = SDL_MapRGBA(surface->format, 255, 255, 255, alpha);
+                pixels[y * size + x] = SDL_MapRGBA(cursorPfd, NULL, 255, 255, 255, alpha);
             }
         }
     }
@@ -796,7 +818,7 @@ static CustomCursor* createCustomCursor(SDL_Renderer* renderer) {
     cursor->height = CURSOR_TEXTURE_SIZE;
     cursor->alpha = 1.0f;
     
-    SDL_FreeSurface(surface);
+    SDL_DestroySurface(surface);
     return cursor;
 }
 
@@ -1060,12 +1082,13 @@ void VNCRuntimeForceRender(ScrcpyVNCClient* vncClient) {
         int windowWidth, windowHeight;
         SDL_GetWindowSize(sdlWindow, &windowWidth, &windowHeight);
 
-        int textureWidth, textureHeight;
-        SDL_QueryTexture(sdlTexture, NULL, NULL, &textureWidth, &textureHeight);
+        int textureWidth = sdlTexture ? sdlTexture->w : 0;
+        int textureHeight = sdlTexture ? sdlTexture->h : 0;
 
         // 获取渲染器的逻辑尺寸
-        int logicalWidth, logicalHeight;
-        SDL_RenderGetLogicalSize(sdlRenderer, &logicalWidth, &logicalHeight);
+        int logicalWidth = 0, logicalHeight = 0;
+        SDL_RendererLogicalPresentation logicalMode = SDL_LOGICAL_PRESENTATION_DISABLED;
+        SDL_GetRenderLogicalPresentation(sdlRenderer, &logicalWidth, &logicalHeight, &logicalMode);
 
         int renderWidth = logicalWidth > 0 ? logicalWidth : windowWidth;
         int renderHeight = logicalHeight > 0 ? logicalHeight : windowHeight;

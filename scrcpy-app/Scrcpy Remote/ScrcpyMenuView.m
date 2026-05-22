@@ -14,7 +14,6 @@
 #import "ScrcpyMenuMaskView.h"
 #import "ScrcpyConstants.h"
 #import <SDL3/SDL_system.h>
-#import <SDL3/SDL_syswm.h>
 #import <SDL3/SDL_mouse.h>
 #import "ScrcpyADBClient.h"
 #import "ScrcpyVNCClient.h"
@@ -764,12 +763,15 @@ static const CGFloat kDynamicIslandWidth = 100.0f;
 #pragma mark - Window Helper
 
 - (UIWindow *)activeWindow {
+    // SDL3 replaced SDL_GetWindowWMInfo with the per-window properties bag.
     SDL_Window *window = SDL_GetMouseFocus();
-    SDL_SysWMinfo info;
-    SDL_VERSION(&info.version);
-    if (SDL_GetWindowWMInfo(window, &info)) {
-        UIWindow *uiWindow = info.info.uikit.window;
-        return uiWindow;
+    if (window) {
+        SDL_PropertiesID props = SDL_GetWindowProperties(window);
+        UIWindow *uiWindow = (__bridge UIWindow *)
+            SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+        if (uiWindow) {
+            return uiWindow;
+        }
     }
     return [UIApplication sharedApplication].keyWindow;
 }

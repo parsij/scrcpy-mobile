@@ -287,7 +287,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     // 运行一小段时间等待其他UI事件
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, NO);
     
-    SDL_iPhoneSetEventPump(SDL_TRUE);
+    SDL_SetiOSEventPump(true);
     SDL_Event e;
 
     while (self.connected && !self.forceStop) {
@@ -372,7 +372,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
         // 清理 SDL Surface
         SDL_Surface *surface = rfbClientGetClientData(self.rfbClient, SDL_Init);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            SDL_FreeSurface(surface);
+            SDL_DestroySurface(surface);
         });
 
         // 清理VNC运行时回调
@@ -385,7 +385,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     
     // 退出SDL
     SDL_Quit();
-    SDL_iPhoneSetEventPump(SDL_FALSE);
+    SDL_SetiOSEventPump(false);
 
     NSLog(@"✅ [ScrcpyVNCClient] SDL main loop ended");
 }
@@ -475,7 +475,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     // 使用远程指针:
     // - 不使用的话, 无法获取远程鼠标的位置变化, 导致发送点击事件时无法正确定位, 但好处是远程的鼠标指针会正确展示
     // - 使用的话, 可以正确获取鼠标位置, 但远程鼠标指针会被隐藏, 需要自己绘制
-    self.rfbClient->appData.useRemoteCursor = SDL_TRUE;
+    self.rfbClient->appData.useRemoteCursor = true;
     
     // 设置帧缓冲区分配回调
     __weak typeof(self) weakSelf = self;
@@ -944,32 +944,32 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
 - (int)convertSDLKeyToVNCKey:(SDL_Keycode)sdlKey {
     switch (sdlKey) {
         // 字母键
-        case SDLK_a: return XK_a;
-        case SDLK_b: return XK_b;
-        case SDLK_c: return XK_c;
-        case SDLK_d: return XK_d;
-        case SDLK_e: return XK_e;
-        case SDLK_f: return XK_f;
-        case SDLK_g: return XK_g;
-        case SDLK_h: return XK_h;
-        case SDLK_i: return XK_i;
-        case SDLK_j: return XK_j;
-        case SDLK_k: return XK_k;
-        case SDLK_l: return XK_l;
-        case SDLK_m: return XK_m;
-        case SDLK_n: return XK_n;
-        case SDLK_o: return XK_o;
-        case SDLK_p: return XK_p;
-        case SDLK_q: return XK_q;
-        case SDLK_r: return XK_r;
-        case SDLK_s: return XK_s;
-        case SDLK_t: return XK_t;
-        case SDLK_u: return XK_u;
-        case SDLK_v: return XK_v;
-        case SDLK_w: return XK_w;
-        case SDLK_x: return XK_x;
-        case SDLK_y: return XK_y;
-        case SDLK_z: return XK_z;
+        case SDLK_A: return XK_a;
+        case SDLK_B: return XK_b;
+        case SDLK_C: return XK_c;
+        case SDLK_D: return XK_d;
+        case SDLK_E: return XK_e;
+        case SDLK_F: return XK_f;
+        case SDLK_G: return XK_g;
+        case SDLK_H: return XK_h;
+        case SDLK_I: return XK_i;
+        case SDLK_J: return XK_j;
+        case SDLK_K: return XK_k;
+        case SDLK_L: return XK_l;
+        case SDLK_M: return XK_m;
+        case SDLK_N: return XK_n;
+        case SDLK_O: return XK_o;
+        case SDLK_P: return XK_p;
+        case SDLK_Q: return XK_q;
+        case SDLK_R: return XK_r;
+        case SDLK_S: return XK_s;
+        case SDLK_T: return XK_t;
+        case SDLK_U: return XK_u;
+        case SDLK_V: return XK_v;
+        case SDLK_W: return XK_w;
+        case SDLK_X: return XK_x;
+        case SDLK_Y: return XK_y;
+        case SDLK_Z: return XK_z;
         
         // 数字键
         case SDLK_0: return XK_0;
@@ -1040,8 +1040,8 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
         case SDLK_RIGHTBRACKET: return XK_bracketright;
         case SDLK_BACKSLASH: return XK_backslash;
         case SDLK_SEMICOLON: return XK_semicolon;
-        case SDLK_QUOTE: return XK_apostrophe;
-        case SDLK_BACKQUOTE: return XK_grave;
+        case SDLK_APOSTROPHE: return XK_apostrophe;
+        case SDLK_GRAVE: return XK_grave;
         case SDLK_COMMA: return XK_comma;
         case SDLK_PERIOD: return XK_period;
         case SDLK_SLASH: return XK_slash;

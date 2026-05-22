@@ -815,6 +815,10 @@
 				MARKETING_VERSION = 4.4.4;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
+						"-lSDL3",
+						"-framework",
+						CoreBluetooth,
+						"-ObjC",
 					"-lscrcpy",
 					"-ltsnet-forwarder",
 					"-lavfilter",
@@ -873,6 +877,10 @@
 				MARKETING_VERSION = 4.4.4;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
+						"-lSDL3",
+						"-framework",
+						CoreBluetooth,
+						"-ObjC",
 					"-lscrcpy",
 					"-ltsnet-forwarder",
 					"-lavfilter",
@@ -959,6 +967,8 @@
 					"-lvncclient",
 					"-lcrypto",
 					"-lSDL3",
+						"-framework",
+						CoreBluetooth,
 					"-lavcodec",
 					"-lavutil",
 					"-lswresample",
@@ -1012,6 +1022,8 @@
 					"-lvncclient",
 					"-lcrypto",
 					"-lSDL3",
+						"-framework",
+						CoreBluetooth,
 					"-lavcodec",
 					"-lavutil",
 					"-lswresample",

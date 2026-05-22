@@ -85,7 +85,7 @@ void ScrcpyTryResetVideo(void) {
     }
 
     // Perform the reset
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_r, SDL_KMOD_LCTRL | SDL_KMOD_SHIFT);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_R, SDL_KMOD_LCTRL | SDL_KMOD_SHIFT);
     resetCountInWindow++;
     lastResetTime = now;
 
@@ -429,7 +429,7 @@ void ScrcpyTryResetVideo(void) {
     // Run a runloop time slice to response UI events
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, NO);
     
-    SDL_iPhoneSetEventPump(SDL_TRUE);
+    SDL_SetiOSEventPump(true);
     
     // Flush all events include the not proccessed SERVER_DISCONNECT events
     SDL_FlushEvents(0, 0xFFFF);
@@ -477,7 +477,7 @@ void ScrcpyTryResetVideo(void) {
     }
     
     scrcpy_main((int)startArgs.count, (char **)args);
-    SDL_iPhoneSetEventPump(SDL_FALSE);
+    SDL_SetiOSEventPump(false);
     
     // Remove SDL event filter to avoid blocking events
     // This caused sync clipboard from remote not working
@@ -622,7 +622,7 @@ void ScrcpyTryResetVideo(void) {
     
     // Trigger reset video when app become active
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self sendKeycodeEvent:SDL_SCANCODE_R keycode:SDLK_r keymod:SDL_KMOD_LCTRL | SDL_KMOD_SHIFT];
+        [self sendKeycodeEvent:SDL_SCANCODE_R keycode:SDLK_R keymod:SDL_KMOD_LCTRL | SDL_KMOD_SHIFT];
         NSLog(@"-> [2] Reset video by LCTRL+SHIFT+R");
     });
 }
@@ -991,32 +991,32 @@ void ScrcpyTryResetVideo(void) {
         case 18: return SDLK_3;             // KEYCODE_POUND (#)
         
         // Letters
-        case 29: return SDLK_a;             // KEYCODE_A
-        case 30: return SDLK_b;             // KEYCODE_B
-        case 31: return SDLK_c;             // KEYCODE_C
-        case 32: return SDLK_d;             // KEYCODE_D
-        case 33: return SDLK_e;             // KEYCODE_E
-        case 34: return SDLK_f;             // KEYCODE_F
-        case 35: return SDLK_g;             // KEYCODE_G
-        case 36: return SDLK_h;             // KEYCODE_H
-        case 37: return SDLK_i;             // KEYCODE_I
-        case 38: return SDLK_j;             // KEYCODE_J
-        case 39: return SDLK_k;             // KEYCODE_K
-        case 40: return SDLK_l;             // KEYCODE_L
-        case 41: return SDLK_m;             // KEYCODE_M
-        case 42: return SDLK_n;             // KEYCODE_N
-        case 43: return SDLK_o;             // KEYCODE_O
-        case 44: return SDLK_p;             // KEYCODE_P
-        case 45: return SDLK_q;             // KEYCODE_Q
-        case 46: return SDLK_r;             // KEYCODE_R
-        case 47: return SDLK_s;             // KEYCODE_S
-        case 48: return SDLK_t;             // KEYCODE_T
-        case 49: return SDLK_u;             // KEYCODE_U
-        case 50: return SDLK_v;             // KEYCODE_V
-        case 51: return SDLK_w;             // KEYCODE_W
-        case 52: return SDLK_x;             // KEYCODE_X
-        case 53: return SDLK_y;             // KEYCODE_Y
-        case 54: return SDLK_z;             // KEYCODE_Z
+        case 29: return SDLK_A;             // KEYCODE_A
+        case 30: return SDLK_B;             // KEYCODE_B
+        case 31: return SDLK_C;             // KEYCODE_C
+        case 32: return SDLK_D;             // KEYCODE_D
+        case 33: return SDLK_E;             // KEYCODE_E
+        case 34: return SDLK_F;             // KEYCODE_F
+        case 35: return SDLK_G;             // KEYCODE_G
+        case 36: return SDLK_H;             // KEYCODE_H
+        case 37: return SDLK_I;             // KEYCODE_I
+        case 38: return SDLK_J;             // KEYCODE_J
+        case 39: return SDLK_K;             // KEYCODE_K
+        case 40: return SDLK_L;             // KEYCODE_L
+        case 41: return SDLK_M;             // KEYCODE_M
+        case 42: return SDLK_N;             // KEYCODE_N
+        case 43: return SDLK_O;             // KEYCODE_O
+        case 44: return SDLK_P;             // KEYCODE_P
+        case 45: return SDLK_Q;             // KEYCODE_Q
+        case 46: return SDLK_R;             // KEYCODE_R
+        case 47: return SDLK_S;             // KEYCODE_S
+        case 48: return SDLK_T;             // KEYCODE_T
+        case 49: return SDLK_U;             // KEYCODE_U
+        case 50: return SDLK_V;             // KEYCODE_V
+        case 51: return SDLK_W;             // KEYCODE_W
+        case 52: return SDLK_X;             // KEYCODE_X
+        case 53: return SDLK_Y;             // KEYCODE_Y
+        case 54: return SDLK_Z;             // KEYCODE_Z
         
         // Navigation
         case 19: return SDLK_UP;            // KEYCODE_DPAD_UP
@@ -1028,14 +1028,14 @@ void ScrcpyTryResetVideo(void) {
         // Punctuation and symbols
         case 55: return SDLK_COMMA;         // KEYCODE_COMMA
         case 56: return SDLK_PERIOD;        // KEYCODE_PERIOD
-        case 68: return SDLK_BACKQUOTE;     // KEYCODE_GRAVE
+        case 68: return SDLK_GRAVE;     // KEYCODE_GRAVE
         case 69: return SDLK_MINUS;         // KEYCODE_MINUS
         case 70: return SDLK_EQUALS;        // KEYCODE_EQUALS
         case 71: return SDLK_LEFTBRACKET;   // KEYCODE_LEFT_BRACKET
         case 72: return SDLK_RIGHTBRACKET;  // KEYCODE_RIGHT_BRACKET
         case 73: return SDLK_BACKSLASH;     // KEYCODE_BACKSLASH
         case 74: return SDLK_SEMICOLON;     // KEYCODE_SEMICOLON
-        case 75: return SDLK_QUOTE;         // KEYCODE_APOSTROPHE
+        case 75: return SDLK_APOSTROPHE;         // KEYCODE_APOSTROPHE
         case 76: return SDLK_SLASH;         // KEYCODE_SLASH
         case 77: return SDLK_2;             // KEYCODE_AT (@)
         case 81: return SDLK_KP_PLUS;       // KEYCODE_PLUS
