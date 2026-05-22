@@ -140,10 +140,12 @@
 - SDL3 仍保留 `Xcode/SDL/SDL.xcodeproj`，但**只剩 framework 产物**（`PBXNativeTarget "SDL3"`, productType=framework），没有 "Static Library-iOS" scheme。
 - 当前架构是静态库 + 大量 ObjC category hack 到 SDL 内部 `SDL_uikitviewcontroller`，不能用 framework（dyld load 时类是只读的，hack 不到内部 ivar / 私有方法）。
 - 改走 **CMake + iOS toolchain**：SDL3 CMakeLists 已有 `option(SDL_STATIC ...)`（CMakeLists.txt:398）。计划用 `cmake -G Xcode -DSDL_STATIC=ON -DSDL_SHARED=OFF` 之类配置三个 ABI 出 libSDL3.a。
-- 旧 patch 三处复盘：
-  - `SDL_UpdateCommandGeneration` 注入（在 SDL_render.c 末尾追加自定义函数）— SDL3 render 命令缓冲机制重写，**待 Phase 3.2 重做 hijack 时再决定**是否需要等价物。
-  - `ENABLE_GCKEYBOARD / ENABLE_GCMOUSE` 宏 sed 删除 — SDL3 已无此宏，改用 `SDL_InitGCKeyboard()` 函数路径；**先不带此 patch**，跑通后看是否仍干扰触摸。
-  - `UITouchTypeIndirectPointer` 屏蔽 — SDL3 该常量仍在 `SDL_uikitview.m:109`，**保留**该 patch。
+- 旧 patch 三处实施结果：
+  - `SDL_UpdateCommandGeneration` 注入 — **已丢弃**。SDL3 内部已在 `FlushRenderCommands()` 末尾自己 `renderer->render_command_generation++`（src/render/SDL_render.c:339），不再需要外部触发。
+  - `ENABLE_GCKEYBOARD / ENABLE_GCMOUSE` 宏 sed — **已丢弃**。SDL3 已无此宏（改用 `SDL_InitGCKeyboard()` 函数路径）。后续若仍干扰触摸，从 app 层用 `SDL_SetHint` 控制。
+  - `UITouchTypeIndirectPointer` 屏蔽 — **保留**。SDL3 中常量仍在 `src/video/uikit/SDL_uikitview.m`，sed 替换为 `UITouchTypeIndirectPointer+1000` 即可生效。
+- `CFRunLoopRunInMode → CFRunLoopRunInMode_fix` 的 textual 替换从 xcodebuild `GCC_PREPROCESSOR_DEFINITIONS` 改写为 cmake `-DCMAKE_C_FLAGS="-DCFRunLoopRunInMode=CFRunLoopRunInMode_fix"`。`scrcpy-app/VNCClient/ScrcpyCommonRuntime.m` 的 `CFRunLoopRunInMode_fix` 实现保持不动。
+- 头路径破坏性变化：`SDL2/SDL.h` → `SDL3/SDL.h`。`porting/libs/include/SDL2/` 已删除，避免 Phase 3 编译时旧头被 resolve；三个 ABI 目录下的 `libSDL2.a` 残留也已清除。
 
 ## 已知差异（不阻塞升级）
 

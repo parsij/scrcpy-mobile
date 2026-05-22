@@ -1,73 +1,95 @@
 #!/bin/bash
+# Build SDL3 3.4.8 as a static library for three iOS ABIs via CMake +
+# ios.toolchain.cmake. The previous SDL2 script drove xcodebuild against
+# SDL's bundled Xcode project; SDL3 only ships a framework target there, so
+# the project no longer has a "Static Library-iOS" scheme and we have to use
+# the CMake path.
+#
+# OUTPUT comes in from the porting Makefile.
 
 set -e;
 set -x;
 
-OUTPUT=$(cd $OUTPUT && pwd);
+SDL_TAG=release-3.4.8
+DEPLOYMENT_TARGET=13.0
+
+OUTPUT=$(cd "$OUTPUT" && pwd);
+TOOLCHAIN="$(cd "$(dirname "$0")/.." && pwd)/../ios-cmake/ios.toolchain.cmake"
 BUILD_DIR="$PWD/build/libsdl";
 mkdir -p "$BUILD_DIR";
-cd $BUILD_DIR;
+cd "$BUILD_DIR";
 
-curl -O https://www.libsdl.org/release/SDL2-2.32.8.tar.gz;
-tar xzvf SDL*.tar.gz;
+# Fetch a clean source tree per build.
+rm -rf SDL-source
+git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git SDL-source
 
-# Add Function SDL_UpdateCommandGeneration
-echo "=> Add Function SDL_UpdateCommandGeneration"
-echo "$(cat << EOF
-void
-SDL_UpdateCommandGeneration(SDL_Renderer *renderer) {
-    renderer->render_command_generation++;
+# Disable the iOS UITouchTypeIndirectPointer recognizer path so SDL falls
+# back to plain touch handling — same intent as the original SDL2 patch,
+# the constant still exists in SDL3 at the same site (src/video/uikit/
+# SDL_uikitview.m around line 109).
+sdl_uikitview=$(ls SDL-source/src/video/uikit/SDL_uikitview.m)
+sed -e 's/UITouchTypeIndirectPointer/UITouchTypeIndirectPointer+1000/g' \
+    "$sdl_uikitview" > "$sdl_uikitview.replaced"
+mv -v "$sdl_uikitview.replaced" "$sdl_uikitview"
+
+# NOTE: dropped two SDL2-era patches that no longer apply:
+#  - SDL_UpdateCommandGeneration injection in SDL_render.c — SDL3 already
+#    bumps render_command_generation internally in FlushRenderCommands().
+#  - ENABLE_GCKEYBOARD / ENABLE_GCMOUSE macro sed — those macros are gone in
+#    SDL3 (Game Controller integration is function-based now); if these end
+#    up interfering with touch we'll add an SDL_SetHint call from the app.
+
+build_target() {
+    local platform=$1   # OS64 | SIMULATORARM64 | SIMULATOR64
+    local arch=$2       # arm64 | x86_64
+    local sdk=$3        # iphoneos | iphonesimulator
+
+    local target_build="$BUILD_DIR/build-$platform"
+    local install_dir="$BUILD_DIR/install-$platform"
+
+    echo "=> Building SDL3 for $platform / $arch ($sdk)..";
+
+    rm -rf "$target_build" "$install_dir"
+    mkdir -p "$target_build"
+    cd "$target_build"
+
+    cmake -G "Unix Makefiles" \
+        -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+        -DPLATFORM="$platform" \
+        -DDEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+        -DARCHS="$arch" \
+        -DENABLE_BITCODE=OFF \
+        -DSDL_SHARED=OFF \
+        -DSDL_STATIC=ON \
+        -DSDL_TEST_LIBRARY=OFF \
+        -DSDL_TESTS=OFF \
+        -DSDL_EXAMPLES=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$install_dir" \
+        -DCMAKE_C_FLAGS="-DCFRunLoopRunInMode=CFRunLoopRunInMode_fix" \
+        ../SDL-source
+
+    cmake --build . --config Release -j8
+    cmake --install .
+
+    # Place the static lib in the same per-ABI layout as the rest of porting/libs.
+    local out_lib_dir="$OUTPUT/$sdk/$arch"
+    mkdir -p "$out_lib_dir"
+    cp -v "$install_dir/lib/libSDL3.a" "$out_lib_dir/"
+
+    # Headers (only need to copy once; all ABIs share the same API).
+    mkdir -p "$OUTPUT/include"
+    rm -rf "$OUTPUT/include/SDL3"
+    cp -rv "$install_dir/include/SDL3" "$OUTPUT/include/"
+
+    cd "$BUILD_DIR"
 }
-EOF
-)" >> SDL2-*/src/render/SDL_render.c;
 
-# Disable ENABLE_GCMOUSE / ENABLE_GCKEYBOARD
-sdl_events_source_file=$(ls SDL2-*/src/video/uikit/SDL_uikitevents.m);
-sed -e 's/^#define ENABLE_GCKEYBOARD.*//' -e 's/^#define ENABLE_GCMOUSE.*//' $sdl_events_source_file > $sdl_events_source_file.replaced;
-mv -v $sdl_events_source_file.replaced $sdl_events_source_file;
+build_target OS64           arm64  iphoneos
+build_target SIMULATORARM64 arm64  iphonesimulator
+build_target SIMULATOR64    x86_64 iphonesimulator
 
-# Disable Pointer type based touch events
-sdl_uikitview_source_file=$(ls SDL2-*/src/video/uikit/SDL_uikitview.m);
-sed -e 's/UITouchTypeIndirectPointer/UITouchTypeIndirectPointer+1000/g' $sdl_uikitview_source_file > $sdl_uikitview_source_file.replaced;
-mv -v $sdl_uikitview_source_file.replaced $sdl_uikitview_source_file;
-
-# Build iOS Libraries
-echo "=> Building for iOS..";
-
-xcodebuild clean build OTHER_CFLAGS="-fembed-bitcode" \
-	BUILD_DIR=$BUILD_DIR/build/iphoneos/arm64 \
-	ARCHS="arm64" \
-	CONFIGURATION=Release \
-    GCC_PREPROCESSOR_DEFINITIONS='CFRunLoopRunInMode=CFRunLoopRunInMode_fix' \
-	-project SDL2-*/Xcode/SDL/SDL.xcodeproj -scheme "Static Library-iOS" -sdk iphoneos;
-xcodebuild clean build OTHER_CFLAGS="-fembed-bitcode" \
-	BUILD_DIR=$BUILD_DIR/build/iphonesimulator/x86_64 \
-	ARCHS="x86_64" \
-	CONFIGURATION=Release \
-    GCC_PREPROCESSOR_DEFINITIONS='CFRunLoopRunInMode=CFRunLoopRunInMode_fix' \
-	-project SDL2-*/Xcode/SDL/SDL.xcodeproj -scheme "Static Library-iOS" -sdk iphonesimulator;
-xcodebuild clean build OTHER_CFLAGS="-fembed-bitcode" \
-	BUILD_DIR=$BUILD_DIR/build/iphonesimulator/arm64 \
-	ARCHS="arm64" \
-	CONFIGURATION=Release \
-    GCC_PREPROCESSOR_DEFINITIONS='CFRunLoopRunInMode=CFRunLoopRunInMode_fix' \
-	-project SDL2-*/Xcode/SDL/SDL.xcodeproj -scheme "Static Library-iOS" -sdk iphonesimulator;
-
-ls -la $BUILD_DIR/build/*/*/*/libSDL2.a;
-
-echo "Copy staticlib...";
-
-[[ -d $OUTPUT/iphoneos/arm64 ]] || mkdir -pv $OUTPUT/iphoneos/arm64;
-cp -v $BUILD_DIR/build/iphoneos/arm64/*/libSDL2.a $OUTPUT/iphoneos/arm64/;
-
-[[ -d $OUTPUT/iphonesimulator/arm64 ]] || mkdir -pv $OUTPUT/iphonesimulator/arm64;
-cp -v $BUILD_DIR/build/iphonesimulator/arm64/*/libSDL2.a $OUTPUT/iphonesimulator/arm64/;
-
-[[ -d $OUTPUT/iphonesimulator/x86_64 ]] || mkdir -pv $OUTPUT/iphonesimulator/x86_64;
-cp -v $BUILD_DIR/build/iphonesimulator/x86_64/*/libSDL2.a $OUTPUT/iphonesimulator/x86_64/;
-
-echo "Copy headers...";
-[[ -d "$OUTPUT/include/SDL2" ]] || mkdir -pv $OUTPUT/include/SDL2;
-cp -v SDL2-*/include/*.h $OUTPUT/include/SDL2;
-
-echo "Build artifacts preserved in: $BUILD_DIR";
+echo "SDL3 build completed!"
+ls -la "$OUTPUT"/iphoneos/arm64/libSDL3.a \
+       "$OUTPUT"/iphonesimulator/arm64/libSDL3.a \
+       "$OUTPUT"/iphonesimulator/x86_64/libSDL3.a
