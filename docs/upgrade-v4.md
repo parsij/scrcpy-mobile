@@ -135,6 +135,14 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### Workaround 保留决定（Phase 4.3）
+
+复审 3 个候选撤回项后决定**全部保留**：
+
+- `Controller.java` 的 `try/catch (RuntimeException)` 兜底（来自 issue #125）：v4.0 上游 #6224 修了 root 剪贴板的特定根因，但兜底是针对**任意**单事件 RuntimeException 的通用保险，不止剪贴板；继续保留几乎零成本，撤回则把一个一般性的稳定性 net 也丢了。
+- `SessionCreateView.swift` 关于"剪贴板同步在 root ROM 必须关闭"的文案：#6224 的修复只覆盖 root 设备这一子场景，仍有定制 ROM 在该路径走出问题的可能；文案对老用户仍有信息价值，不改。
+- `ScrcpyTryResetVideo()` (Ctrl+Shift+R 键序触发上游 Reset Video 快捷键)：这是 scrcpy 自身的快捷键，不属 SDL2 API；v4.0 仍支持，保留。
+
 ### ADBClient option map: v4.0 新 flag 入表（Phase 4.2）
 
 在 `ScrcpyADBClient.m::optionArgumentKeyMapping` 增加 v4.0 新增 CLI flag 的反向映射（key → `--flag-name`），便于将来 UI 暴露 / 现在通过 customFlags 转发：
