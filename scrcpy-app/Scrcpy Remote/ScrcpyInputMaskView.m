@@ -1,6 +1,6 @@
 #import "ScrcpyInputMaskView.h"
-#import <SDL2/SDL_system.h>
-#import <SDL2/SDL_events.h>
+#import <SDL3/SDL_system.h>
+#import <SDL3/SDL_events.h>
 #import "ScrcpyConstants.h"
 
 @interface ScrcpyInputMaskView () <UIGestureRecognizerDelegate>
@@ -160,7 +160,7 @@ static const CGFloat kKeyButtonSpacing = 6.0;
         return;
     }
     NSLog(@"Input mask background tapped - stopping text input");
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     [self hide];
 }
 
@@ -314,20 +314,36 @@ static const CGFloat kKeyButtonSpacing = 6.0;
 // MARK: - Button Actions
 
 - (void)handleHideKeyboardTapped {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     [self hide];
 }
 
 - (void)pushSDLKeyDownWithScancode:(SDL_Scancode)scancode keycode:(SDL_Keycode)keycode {
-    SDL_Keysym keySym; keySym.scancode = scancode; keySym.sym = keycode; keySym.mod = KMOD_NONE; keySym.unused = 1;
-    SDL_KeyboardEvent e; e.type = SDL_KEYDOWN; e.state = SDL_PRESSED; e.repeat = '\0'; e.keysym = keySym;
-    SDL_Event evt; evt.type = e.type; evt.key = e; SDL_PushEvent(&evt);
+    // SDL3: SDL_KeyboardEvent.keysym was flattened into the event itself
+    // (key / scancode / mod), .state was replaced by .down (bool).
+    SDL_Event evt;
+    SDL_memset(&evt, 0, sizeof(evt));
+    evt.type = SDL_EVENT_KEY_DOWN;
+    evt.key.type = SDL_EVENT_KEY_DOWN;
+    evt.key.scancode = scancode;
+    evt.key.key = keycode;
+    evt.key.mod = SDL_KMOD_NONE;
+    evt.key.down = true;
+    evt.key.repeat = false;
+    SDL_PushEvent(&evt);
 }
 
 - (void)pushSDLKeyUpWithScancode:(SDL_Scancode)scancode keycode:(SDL_Keycode)keycode {
-    SDL_Keysym keySym; keySym.scancode = scancode; keySym.sym = keycode; keySym.mod = KMOD_NONE; keySym.unused = 1;
-    SDL_KeyboardEvent e; e.type = SDL_KEYUP; e.state = SDL_PRESSED; e.repeat = '\0'; e.keysym = keySym;
-    SDL_Event evt; evt.type = e.type; evt.key = e; SDL_PushEvent(&evt);
+    SDL_Event evt;
+    SDL_memset(&evt, 0, sizeof(evt));
+    evt.type = SDL_EVENT_KEY_UP;
+    evt.key.type = SDL_EVENT_KEY_UP;
+    evt.key.scancode = scancode;
+    evt.key.key = keycode;
+    evt.key.mod = SDL_KMOD_NONE;
+    evt.key.down = false;
+    evt.key.repeat = false;
+    SDL_PushEvent(&evt);
 }
 
 - (void)sendKeyWithActiveModifiers:(SDL_Scancode)scancode keycode:(SDL_Keycode)keycode {

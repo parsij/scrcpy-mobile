@@ -10,7 +10,7 @@
 #import "ScrcpyADBClient.h"
 #import "ADBClient.h"
 #import "ScrcpyClientWrapper.h"
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 #import <libavutil/frame.h>
 #import <libavutil/imgutils.h>
 #import <CoreMedia/CoreMedia.h>
@@ -20,44 +20,36 @@
 #import "ScrcpyRuntime.h"
 
 // C function implementation
+// SDL3: SDL_KeyboardEvent.keysym was flattened into the event (key /
+// scancode / mod); .state was replaced by .down (bool); .repeat became bool.
 void ScrcpySendKeycodeEvent(SDL_Scancode scancode, SDL_Keycode keycode, SDL_Keymod keymod) {
-    SDL_Keysym keySym;
-    keySym.scancode = scancode;
-    keySym.sym = keycode;
-    keySym.mod = keymod;
-    keySym.unused = 1;
-    
     // Send key down event
     {
-        SDL_KeyboardEvent keyEvent;
-        keyEvent.type = SDL_KEYDOWN;
-        keyEvent.state = SDL_PRESSED;
-        keyEvent.repeat = '\0';
-        keyEvent.keysym = keySym;
-        
         SDL_Event event;
-        event.type = keyEvent.type;
-        event.key = keyEvent;
-        
+        SDL_memset(&event, 0, sizeof(event));
+        event.type = SDL_EVENT_KEY_DOWN;
+        event.key.type = SDL_EVENT_KEY_DOWN;
+        event.key.scancode = scancode;
+        event.key.key = keycode;
+        event.key.mod = keymod;
+        event.key.down = true;
+        event.key.repeat = false;
         SDL_PushEvent(&event);
-        
         NSLog(@"KEYDOWN EVENT: Post Success");
     }
-    
+
     // Send key up event
     {
-        SDL_KeyboardEvent keyEvent;
-        keyEvent.type = SDL_KEYUP;
-        keyEvent.state = SDL_PRESSED;
-        keyEvent.repeat = '\0';
-        keyEvent.keysym = keySym;
-        
         SDL_Event event;
-        event.type = keyEvent.type;
-        event.key = keyEvent;
-        
+        SDL_memset(&event, 0, sizeof(event));
+        event.type = SDL_EVENT_KEY_UP;
+        event.key.type = SDL_EVENT_KEY_UP;
+        event.key.scancode = scancode;
+        event.key.key = keycode;
+        event.key.mod = keymod;
+        event.key.down = false;
+        event.key.repeat = false;
         SDL_PushEvent(&event);
-        
         NSLog(@"KEYUP EVENT: Post Success");
     }
 }
@@ -93,7 +85,7 @@ void ScrcpyTryResetVideo(void) {
     }
 
     // Perform the reset
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_r, KMOD_LCTRL | KMOD_SHIFT);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_r, SDL_KMOD_LCTRL | SDL_KMOD_SHIFT);
     resetCountInWindow++;
     lastResetTime = now;
 
@@ -490,7 +482,7 @@ void ScrcpyTryResetVideo(void) {
 -(void)stopScrcpy {
     // Call SQL_Quit to send Quit Event
     SDL_Event event;
-    event.type = SDL_QUIT;
+    event.type = SDL_EVENT_QUIT;
     SDL_PushEvent(&event);
     
     // 使用新的 ScrcpyUpdateStatus 函数发送断开连接状态通知
@@ -511,7 +503,7 @@ void ScrcpyTryResetVideo(void) {
 -(void)syncClipboard {
     NSLog(@"-> Syncing clipboard");
     SDL_Event clip_event;
-    clip_event.type = SDL_CLIPBOARDUPDATE;
+    clip_event.type = SDL_EVENT_CLIPBOARD_UPDATE;
 
     BOOL posted = (SDL_PushEvent(&clip_event) > 0);
     NSLog(@"Clipboard event: Post %@", posted? @"Success" : @"Failed");
@@ -621,7 +613,7 @@ void ScrcpyTryResetVideo(void) {
     
     // Trigger reset video when app become active
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self sendKeycodeEvent:SDL_SCANCODE_R keycode:SDLK_r keymod:KMOD_LCTRL | KMOD_SHIFT];
+        [self sendKeycodeEvent:SDL_SCANCODE_R keycode:SDLK_r keymod:SDL_KMOD_LCTRL | SDL_KMOD_SHIFT];
         NSLog(@"-> [2] Reset video by LCTRL+SHIFT+R");
     });
 }

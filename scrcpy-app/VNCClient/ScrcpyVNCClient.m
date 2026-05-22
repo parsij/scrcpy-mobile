@@ -54,7 +54,7 @@ static inline int ScrcpyVNCShiftedKeysym(int keysym, BOOL shiftActive) {
 @property (nonatomic, assign) BOOL physMetaDown, physCtrlDown, physAltDown, physShiftDown;
 // Timestamp (CFAbsoluteTime) of last non-modifier key pressed while any modifier was active
 @property (nonatomic, assign) CFAbsoluteTime lastKeyWithModifierTime;
-// Timestamp of last non-modifier key press (for suppressing duplicate SDL_TEXTINPUT)
+// Timestamp of last non-modifier key press (for suppressing duplicate SDL_EVENT_TEXT_INPUT)
 @property (nonatomic, assign) CFAbsoluteTime lastNonModifierKeyTime;
 @end
 
@@ -297,54 +297,51 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
         }
         
         switch (e.type) {
-            case SDL_DISPLAYEVENT:
-                NSLog(@"SDL_DISPLAYEVENT: display %d, event %d", e.display.display, e.display.event);
-                break;
-                
-            case SDL_WINDOWEVENT:
-                switch (e.window.event) {
-                    case SDL_WINDOWEVENT_EXPOSED:
-                        if (self.rfbClient) {
-                            // 使用智能帧更新请求
-                            [self sendSmartFramebufferUpdateRequest];
-                        }
-                        break;
-                        
-                    case SDL_WINDOWEVENT_RESIZED:
-                        if (self.rfbClient) {
-                            SendExtDesktopSize(self.rfbClient, e.window.data1, e.window.data2);
-                        }
-                        break;
-                        
-                    case SDL_WINDOWEVENT_FOCUS_GAINED:
-                        if (SDL_HasClipboardText()) {
-                            char *text = SDL_GetClipboardText();
-                            if (text && self.rfbClient) {
-                                rfbClientLog("sending clipboard text '%s'\n", text);
-                                SendClientCutText(self.rfbClient, text, (int)strlen(text));
-                                SDL_free(text);
-                            }
-                        }
-                        break;
-                        
-                    case SDL_WINDOWEVENT_FOCUS_LOST:
-                        NSLog(@"SDL_WINDOWEVENT_FOCUS_LOST");
-                        break;
+            // SDL3 flattened display + window events: there is no
+            // SDL_DISPLAYEVENT / SDL_WINDOWEVENT wrapper; each sub-kind has
+            // its own e.type value. Drop the display info log and promote
+            // the inner window cases to peers of e.type.
+
+            case SDL_EVENT_WINDOW_EXPOSED:
+                if (self.rfbClient) {
+                    // 使用智能帧更新请求
+                    [self sendSmartFramebufferUpdateRequest];
                 }
                 break;
+
+            case SDL_EVENT_WINDOW_RESIZED:
+                if (self.rfbClient) {
+                    SendExtDesktopSize(self.rfbClient, e.window.data1, e.window.data2);
+                }
+                break;
+
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                if (SDL_HasClipboardText()) {
+                    char *text = SDL_GetClipboardText();
+                    if (text && self.rfbClient) {
+                        rfbClientLog("sending clipboard text '%s'\n", text);
+                        SendClientCutText(self.rfbClient, text, (int)strlen(text));
+                        SDL_free(text);
+                    }
+                }
+                break;
+
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                NSLog(@"SDL_EVENT_WINDOW_FOCUS_LOST");
+                break;
                 
-            case SDL_QUIT:
-                NSLog(@"🔌 [ScrcpyVNCClient] SDL_QUIT event received");
+            case SDL_EVENT_QUIT:
+                NSLog(@"🔌 [ScrcpyVNCClient] SDL_EVENT_QUIT event received");
                 self.forceStop = YES;
                 break;
                 
-            case SDL_KEYDOWN:
-            case SDL_KEYUP:
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
                 // 处理键盘按键事件
                 [self handleSDLKeyboardEvent:&e];
                 break;
                 
-            case SDL_TEXTINPUT:
+            case SDL_EVENT_TEXT_INPUT:
                 // 处理文本输入事件
                 [self handleSDLTextInputEvent:&e];
                 break;
@@ -797,14 +794,14 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     }
     
     // 将SDL键码转换为VNC键码
-    int vncKeyCode = [self convertSDLKeyToVNCKey:event->key.keysym.sym];
+    int vncKeyCode = [self convertSDLKeyToVNCKey:event->key.key];
     if (vncKeyCode == -1) {
-        NSLog(@"⚠️ [ScrcpyVNCClient] Unknown SDL key: %d", event->key.keysym.sym);
+        NSLog(@"⚠️ [ScrcpyVNCClient] Unknown SDL key: %d", event->key.key);
         return;
     }
     
-    BOOL isPressed = (event->type == SDL_KEYDOWN);
-    SDL_Keycode sdlKey = event->key.keysym.sym;
+    BOOL isPressed = (event->type == SDL_EVENT_KEY_DOWN);
+    SDL_Keycode sdlKey = event->key.key;
 
     BOOL isModifier = (sdlKey == SDLK_LCTRL || sdlKey == SDLK_RCTRL ||
                        sdlKey == SDLK_LALT  || sdlKey == SDLK_RALT  ||
@@ -920,7 +917,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
                         (self.lastAugmentedMask != ScrcpyModifierMaskNone) || self.nextKeyAlreadyCombined;
 
     // Additionally, if a non-modifier key with modifiers was pressed very recently,
-    // suppress the following SDL_TEXTINPUT once (accounts for ordering where modifiers are released first)
+    // suppress the following SDL_EVENT_TEXT_INPUT once (accounts for ordering where modifiers are released first)
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     const CFAbsoluteTime kSuppressWindow = 0.25; // seconds
     // Suppress after a recent non-modifier key press to avoid duplicate visible characters
@@ -1134,7 +1131,7 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
         NSLog(@"🔌 [ScrcpyVNCClient] Connected client detected, using SDL_Quit for normal exit");
         // 如果已连接并启动了SDL事件循环
         SDL_Event event;
-        event.type = SDL_QUIT;
+        event.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&event);
     } else if (self.rfbClient) {
         NSLog(@"🔌 [ScrcpyVNCClient] Connecting state detected, cancelling connection and cleaning up RFB client");

@@ -13,9 +13,9 @@
 #import "Scrcpy_Remote-Swift.h"
 #import "ScrcpyMenuMaskView.h"
 #import "ScrcpyConstants.h"
-#import <SDL2/SDL_system.h>
-#import <SDL2/SDL_syswm.h>
-#import <SDL2/SDL_mouse.h>
+#import <SDL3/SDL_system.h>
+#import <SDL3/SDL_syswm.h>
+#import <SDL3/SDL_mouse.h>
 #import "ScrcpyADBClient.h"
 #import "ScrcpyVNCClient.h"
 
@@ -440,7 +440,7 @@ static const CGFloat kDynamicIslandWidth = 100.0f;
         CGPoint location = [gesture locationInView:self.window];
         if (![self.menuView pointInside:[self.menuView convertPoint:location fromView:self] withEvent:nil] &&
             ![self.capsuleView pointInside:[self.capsuleView convertPoint:location fromView:self] withEvent:nil]) {
-            SDL_StopTextInput();
+            SDL_StopTextInput(SDL_GetKeyboardFocus());
             [self toggleMenuExpansion];
         }
     }
@@ -648,21 +648,21 @@ static const CGFloat kDynamicIslandWidth = 100.0f;
 #pragma mark - Button Actions
 
 - (void)backButtonTapped:(UIButton *)sender {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     if ([self.delegate respondsToSelector:@selector(didTapBackButton)]) {
         [self.delegate didTapBackButton];
     }
 }
 
 - (void)homeButtonTapped:(UIButton *)sender {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     if ([self.delegate respondsToSelector:@selector(didTapHomeButton)]) {
         [self.delegate didTapHomeButton];
     }
 }
 
 - (void)switchButtonTapped:(UIButton *)sender {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     if ([self.delegate respondsToSelector:@selector(didTapSwitchButton)]) {
         [self.delegate didTapSwitchButton];
     }
@@ -677,7 +677,7 @@ static const CGFloat kDynamicIslandWidth = 100.0f;
 
 - (void)actionsButtonTapped:(UIButton *)sender {
     NSLog(@"🚀 [ScrcpyMenuView] Actions button tapped");
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     [self showActionsMenu];
 }
 
@@ -695,14 +695,14 @@ static const CGFloat kDynamicIslandWidth = 100.0f;
         }];
     }];
 
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
 
     NSLog(@"🎯🎯🎯 [ScrcpyMenuView] About to call showActionsMenu via gesture");
     [self showActionsMenu];
 }
 
 - (void)disconnectButtonTapped:(UIButton *)sender {
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     if ([self.delegate respondsToSelector:@selector(didTapDisconnectButton)]) {
         [self.delegate didTapDisconnectButton];
     }

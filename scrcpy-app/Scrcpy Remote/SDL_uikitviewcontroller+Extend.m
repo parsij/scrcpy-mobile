@@ -8,9 +8,9 @@
 #import "SDL_uikitviewcontroller+Extend.h"
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
-#import <SDL2/SDL.h>
-#import <SDL2/SDL_events.h>
-#import <SDL2/SDL_system.h>
+#import <SDL3/SDL.h>
+#import <SDL3/SDL_events.h>
+#import <SDL3/SDL_system.h>
 #import "ScrcpyClientWrapper.h"
 #import "ADBClient.h"
 #import "ScrcpyADBClient.h"
@@ -191,19 +191,21 @@ static char orientationLockEnabledKey;
             NSLog(@"📐 [StageManager] Window size mismatch detected - SDL: %dx%d, Actual: %dx%d",
                   sdlWidth, sdlHeight, newWidth, newHeight);
 
-            // Push SDL window resize event to trigger scrcpy's coordinate recalculation
-            // This makes sc_screen_update_content_rect() recalculate the touch mapping rect
+            // Push SDL window resize event to trigger scrcpy's coordinate recalculation.
+            // This makes sc_screen_update_content_rect() recalculate the touch mapping rect.
+            // SDL3 flattened window events: the type IS the specific window event
+            // (no more separate event.window.event sub-discriminator).
             SDL_Event event;
             SDL_memset(&event, 0, sizeof(event));
-            event.type = SDL_WINDOWEVENT;
-            event.window.event = SDL_WINDOWEVENT_SIZE_CHANGED;
+            event.type = SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
             event.window.data1 = newWidth;
             event.window.data2 = newHeight;
             event.window.windowID = SDL_GetWindowID(sdlWindow);
             SDL_PushEvent(&event);
 
-            // Also push RESIZED event for complete handling
-            event.window.event = SDL_WINDOWEVENT_RESIZED;
+            // Also push the size-changed-in-points sibling so any listener
+            // that watches RESIZED still sees an update.
+            event.type = SDL_EVENT_WINDOW_RESIZED;
             SDL_PushEvent(&event);
 
             NSLog(@"📐 [StageManager] Pushed SDL window resize events: %dx%d", newWidth, newHeight);
@@ -621,22 +623,22 @@ static char orientationLockEnabledKey;
 
 - (void)didTapBackButton {
     // 发送 Back 按键事件 (Ctrl+B)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_B, SDLK_b, KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_B, SDLK_b, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapHomeButton {
     // 发送 Home 按键事件 (Ctrl+H)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_H, SDLK_h, KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_H, SDLK_h, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapSwitchButton {
     // 发送 Switch 按键事件 (Ctrl+S)
-    ScrcpySendKeycodeEvent(SDL_SCANCODE_S, SDLK_s, KMOD_LCTRL);
+    ScrcpySendKeycodeEvent(SDL_SCANCODE_S, SDLK_s, SDL_KMOD_LCTRL);
 }
 
 - (void)didTapKeyboardButton {
     // Toggle keyboard
-    SDL_StartTextInput();
+    SDL_StartTextInput(SDL_GetKeyboardFocus());
 }
 
 - (void)didTapActionsButton {

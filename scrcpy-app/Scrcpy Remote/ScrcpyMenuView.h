@@ -1,5 +1,5 @@
 #import <UIKit/UIKit.h>
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 
 NS_ASSUME_NONNULL_BEGIN
 

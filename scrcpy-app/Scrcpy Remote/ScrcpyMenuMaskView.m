@@ -1,5 +1,5 @@
 #import "ScrcpyMenuMaskView.h"
-#import <SDL2/SDL_system.h>
+#import <SDL3/SDL_system.h>
 
 @implementation ScrcpyMenuMaskView
 
@@ -84,7 +84,7 @@
 
 - (void)handleTap:(UITapGestureRecognizer *)gesture {
     // Stop text input
-    SDL_StopTextInput();
+    SDL_StopTextInput(SDL_GetKeyboardFocus());
     
     // Notify delegate
     if ([self.delegate respondsToSelector:@selector(didTapMenuMask)]) {

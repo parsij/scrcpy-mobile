@@ -9,7 +9,7 @@
 #define ScrcpyVNCRuntime_h
 
 #import <Foundation/Foundation.h>
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 #import <rfb/rfbclient.h>
 #import "ScrcpyBlockWrapper.h"
 

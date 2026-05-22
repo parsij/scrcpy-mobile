@@ -7,7 +7,7 @@
 //
 
 #import "ScrcpyVNCAudioPlayer.h"
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 #import <libavcodec/avcodec.h>
 #import <libavformat/avformat.h>
 #import <libswresample/swresample.h>
@@ -43,7 +43,8 @@
 @property (nonatomic, assign) AVFrame *frame;
 
 // SDL Audio
-@property (nonatomic, assign) SDL_AudioDeviceID audioDevice;
+// SDL3: audio is driven through an SDL_AudioStream rather than a device id.
+@property (nonatomic, assign) SDL_AudioStream *audioStream;
 @property (nonatomic, assign) SDL_AudioSpec audioSpec;
 
 // Threading
@@ -79,7 +80,7 @@
         _swrContext = NULL;
         _packet = NULL;
         _frame = NULL;
-        _audioDevice = 0;
+        _audioStream = NULL;
         _shouldStop = NO;
         _volume = 1.0f;
         _ringBuffer = NULL;
@@ -168,7 +169,9 @@
         strongSelf.isPlaying = YES;
 
         // Start SDL audio playback
-        SDL_PauseAudioDevice(strongSelf.audioDevice, 0);
+        if (strongSelf.audioStream) {
+            SDL_ResumeAudioStreamDevice(strongSelf.audioStream);
+        }
 
         // Start receive thread
         strongSelf.receiveThread = [[NSThread alloc] initWithTarget:strongSelf
@@ -205,11 +208,12 @@
         self.socketFd = -1;
     }
 
-    // Stop SDL audio
-    if (self.audioDevice > 0) {
-        SDL_PauseAudioDevice(self.audioDevice, 1);
-        SDL_CloseAudioDevice(self.audioDevice);
-        self.audioDevice = 0;
+    // Stop SDL audio (SDL3 owns the device behind the stream;
+    // destroying the stream closes the underlying device).
+    if (self.audioStream) {
+        SDL_PauseAudioStreamDevice(self.audioStream);
+        SDL_DestroyAudioStream(self.audioStream);
+        self.audioStream = NULL;
     }
 
     // Cleanup
@@ -401,66 +405,81 @@
     return toRead;
 }
 
-#pragma mark - SDL Audio
+#pragma mark - SDL Audio (SDL3)
 
-static void sdlAudioCallback(void *userdata, Uint8 *stream, int len) {
+// SDL3 audio uses an SDL_AudioStream model. The audio thread calls the
+// supplied callback when it needs more data, and the callback feeds the
+// stream with SDL_PutAudioStreamData. There is no more per-device
+// SDL_AudioDeviceID + sample-buffer-callback pair from SDL2.
+static void sdlAudioCallback(void *userdata, SDL_AudioStream *stream,
+                             int additional_amount, int total_amount) {
+    (void)total_amount;
     ScrcpyVNCAudioPlayer *player = (__bridge ScrcpyVNCAudioPlayer *)userdata;
-    [player fillAudioBuffer:stream length:len];
+    [player feedAudioStream:stream length:additional_amount];
 }
 
-- (void)fillAudioBuffer:(Uint8 *)stream length:(int)len {
-    memset(stream, 0, len);
-    if (self.shouldStop) return;
+- (void)feedAudioStream:(SDL_AudioStream *)stream length:(int)len {
+    if (len <= 0 || self.shouldStop) return;
 
     uint8_t *tempBuffer = (uint8_t *)malloc(len);
     if (!tempBuffer) return;
 
     int bytesRead = [self readFromRingBuffer:tempBuffer length:len];
+    if (bytesRead <= 0) {
+        // Push silence so the device keeps running.
+        memset(tempBuffer, 0, len);
+        SDL_PutAudioStreamData(stream, tempBuffer, len);
+        free(tempBuffer);
+        return;
+    }
 
-    if (bytesRead > 0) {
-        if (self.volume >= 1.0f) {
-            memcpy(stream, tempBuffer, bytesRead);
-        } else if (self.volume > 0.0f) {
-            SDL_MixAudioFormat(stream, tempBuffer, AUDIO_S16SYS, bytesRead,
-                             (int)(self.volume * SDL_MIX_MAXVOLUME));
+    if (self.volume < 1.0f && self.volume > 0.0f) {
+        // SDL3: SDL_MixAudio mixes src into dst using a given format and
+        // volume in [0.0, 1.0]. We mix from tempBuffer into a fresh
+        // silent buffer to apply gain, then push that.
+        uint8_t *out = (uint8_t *)calloc(1, bytesRead);
+        if (out) {
+            SDL_MixAudio(out, tempBuffer, SDL_AUDIO_S16, bytesRead, self.volume);
+            SDL_PutAudioStreamData(stream, out, bytesRead);
+            free(out);
         }
+    } else if (self.volume <= 0.0f) {
+        memset(tempBuffer, 0, bytesRead);
+        SDL_PutAudioStreamData(stream, tempBuffer, bytesRead);
+    } else {
+        SDL_PutAudioStreamData(stream, tempBuffer, bytesRead);
     }
 
     free(tempBuffer);
 }
 
 - (BOOL)initSDLAudio {
-    if (!(SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO)) {
-        if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
+    if (!SDL_WasInit(SDL_INIT_AUDIO)) {
+        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             NSLog(@"❌ [VNCAudioPlayer] Failed to initialize SDL audio: %s", SDL_GetError());
             return NO;
         }
     }
 
-    // Calculate SDL buffer samples based on buffer time
-    int sdlSamples = (AUDIO_SAMPLE_RATE * self.bufferMs) / 1000;
-    int powerOf2 = 256;
-    while (powerOf2 < sdlSamples) powerOf2 <<= 1;
-    if (powerOf2 > 4096) powerOf2 = 4096;
-
     SDL_AudioSpec wanted;
     SDL_zero(wanted);
     wanted.freq = AUDIO_SAMPLE_RATE;
-    wanted.format = AUDIO_S16SYS;
+    wanted.format = SDL_AUDIO_S16;
     wanted.channels = AUDIO_CHANNELS;
-    wanted.samples = powerOf2;
-    wanted.callback = sdlAudioCallback;
-    wanted.userdata = (__bridge void *)self;
 
-    self.audioDevice = SDL_OpenAudioDevice(NULL, 0, &wanted, &_audioSpec, 0);
-
-    if (self.audioDevice == 0) {
-        NSLog(@"❌ [VNCAudioPlayer] Failed to open audio device: %s", SDL_GetError());
+    SDL_AudioStream *stream = SDL_OpenAudioDeviceStream(
+        SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &wanted, sdlAudioCallback,
+        (__bridge void *)self);
+    if (!stream) {
+        NSLog(@"❌ [VNCAudioPlayer] Failed to open audio device stream: %s", SDL_GetError());
         return NO;
     }
 
-    NSLog(@"🔊 [VNCAudioPlayer] SDL audio: %dHz, %d ch, %d samples/buffer",
-          self.audioSpec.freq, self.audioSpec.channels, self.audioSpec.samples);
+    self.audioStream = stream;
+    self.audioSpec = wanted;
+
+    NSLog(@"🔊 [VNCAudioPlayer] SDL3 audio stream open: %dHz, %d ch",
+          self.audioSpec.freq, self.audioSpec.channels);
 
     return YES;
 }

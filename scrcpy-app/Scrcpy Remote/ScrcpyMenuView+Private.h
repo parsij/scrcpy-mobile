@@ -6,9 +6,9 @@
 //
 
 #import "ScrcpyMenuView.h"
-#import <SDL2/SDL.h>
-#import <SDL2/SDL_system.h>
-#import <SDL2/SDL_syswm.h>
+#import <SDL3/SDL.h>
+#import <SDL3/SDL_system.h>
+#import <SDL3/SDL_syswm.h>
 #import "ScrcpyActionsBridge.h"
 
 NS_ASSUME_NONNULL_BEGIN

@@ -9,7 +9,7 @@
 #import "ScrcpyBlockWrapper.h"
 
 #import <objc/runtime.h>
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 
 #import "ScrcpyVNCClient.h"
 #import "ScrcpyADBClient.h"

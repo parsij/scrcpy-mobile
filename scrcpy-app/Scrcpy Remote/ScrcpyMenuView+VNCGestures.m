@@ -9,7 +9,7 @@
 #import "ScrcpyMenuView+Private.h"
 #import "ScrcpyConstants.h"
 #import "ScrcpyVNCClient.h"
-#import <SDL2/SDL_mouse.h>
+#import <SDL3/SDL_mouse.h>
 
 @implementation ScrcpyMenuView (VNCGestures)
 

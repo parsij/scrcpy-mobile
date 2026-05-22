@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import "scrcpy-porting.h"
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 
 NS_ASSUME_NONNULL_BEGIN
 

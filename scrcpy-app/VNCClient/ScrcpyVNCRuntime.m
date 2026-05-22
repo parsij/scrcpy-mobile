@@ -8,7 +8,7 @@
 #import "ScrcpyVNCRuntime.h"
 #import "ScrcpyCommon.h"
 #import "ScrcpyConstants.h"
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 #import <rfb/rfbclient.h>
 #import <arpa/inet.h>
 #import <objc/runtime.h>
@@ -272,17 +272,21 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
     SDL_SetHint(SDL_HINT_RENDER_METAL_PREFER_LOW_POWER_DEVICE, "0");
 
     // 创建渲染器，启用VSync以避免撕裂
-    *sdlRenderer = SDL_CreateRenderer(*sdlWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!sdlRenderer) {
+    // SDL3: SDL_CreateRenderer(window, name); the index/flags args from SDL2
+    // are gone, accelerated is implicit, and VSync is set after creation via
+    // SDL_SetRenderVSync().
+    *sdlRenderer = SDL_CreateRenderer(*sdlWindow, NULL);
+    if (!*sdlRenderer) {
         rfbClientErr("resize: error creating renderer: %s\n", SDL_GetError());
         return FALSE;
     }
+    SDL_SetRenderVSync(*sdlRenderer, 1);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     
     // 获取设备缩放因子并设置SDL渲染器缩放
     float deviceScale = UIScreen.mainScreen.nativeScale;
     NSLog(@"[VNCScreenDebug] Device scale factor: %.2f", deviceScale);
-    SDL_RenderSetScale(*sdlRenderer, deviceScale, deviceScale);
+    SDL_SetRenderScale(*sdlRenderer, deviceScale, deviceScale);
     
     // 保存渲染器
     vncClient.currentRenderer = *sdlRenderer;
@@ -488,7 +492,7 @@ static inline void VNCRuntimeFinishedFrameBufferUpdate(rfbClient* cl, SDL_Textur
         else if (cursorScreenY > renderHeight - CURSOR_EDGE_MARGIN) cursorScreenY = renderHeight - CURSOR_EDGE_MARGIN;
     }
 
-    SDL_Rect dstRect = {offsetX, offsetY, scaledWidth, scaledHeight};
+    SDL_FRect dstRect = {(float)offsetX, (float)offsetY, (float)scaledWidth, (float)scaledHeight};
 
     // NSLog(@"%@ 🖼️ FinishedFrameBufferUpdate - presenting frame, dstRect(%d,%d,%d,%d)",
     //       VNC_RENDER_LOG_PREFIX, offsetX, offsetY, scaledWidth, scaledHeight);
@@ -514,7 +518,7 @@ static inline void VNCRuntimeFinishedFrameBufferUpdate(rfbClient* cl, SDL_Textur
         // 准备渲染
         SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
         SDL_RenderClear(sdlRenderer);
-        SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &dstRect);
+        SDL_RenderTexture(sdlRenderer, sdlTexture, NULL, &dstRect);
 
         if (shouldDrawCursor) {
             VNCRuntimeDrawMacOSCursor(sdlRenderer, cursorScreenX, cursorScreenY, cursorScale);
@@ -840,17 +844,18 @@ void VNCRuntimeDrawMacOSCursor(SDL_Renderer* renderer, int x, int y, float scale
     SDL_SetTextureAlphaMod(g_cursorTexture, (Uint8)(255));
     
     // 圆形光标热点在中心位置
-    SDL_Rect destRect = {
-        x - cursorSize / 2,  // 圆心对准实际点击位置
-        y - cursorSize / 2,  // 圆心对准实际点击位置
-        cursorSize,
-        cursorSize
+    // SDL3 SDL_RenderTexture takes SDL_FRect (floats).
+    SDL_FRect destRect = {
+        (float)(x - cursorSize / 2),  // 圆心对准实际点击位置
+        (float)(y - cursorSize / 2),
+        (float)cursorSize,
+        (float)cursorSize
     };
-    
+
     // 使用高质量纹理过滤（但不启用VSync以避免阻塞）
-    SDL_SetTextureScaleMode(g_cursorTexture, SDL_ScaleModeLinear);
-    
-    SDL_RenderCopy(renderer, g_cursorTexture, NULL, &destRect);
+    SDL_SetTextureScaleMode(g_cursorTexture, SDL_SCALEMODE_LINEAR);
+
+    SDL_RenderTexture(renderer, g_cursorTexture, NULL, &destRect);
     
     // 可选：添加调试信息显示当前鼠标位置（仅在调试模式下）
     #ifdef DEBUG_CURSOR
@@ -1121,7 +1126,7 @@ void VNCRuntimeForceRender(ScrcpyVNCClient* vncClient) {
             g_mouseMovedThisFrame = NO;
         }
 
-        SDL_Rect dstRect = {offsetX, offsetY, scaledWidth, scaledHeight};
+        SDL_FRect dstRect = {(float)offsetX, (float)offsetY, (float)scaledWidth, (float)scaledHeight};
 
         // 使用（可能已调整的）offsetX/Y重新计算光标屏幕位置
         int cursorScreenX = dstRect.x + (remoteMouseX * scaledWidth) / textureWidth;
@@ -1160,7 +1165,7 @@ void VNCRuntimeForceRender(ScrcpyVNCClient* vncClient) {
 
         SDL_SetRenderDrawColor(sdlRenderer, 0, 0, 0, 255);
         SDL_RenderClear(sdlRenderer);
-        SDL_RenderCopy(sdlRenderer, sdlTexture, NULL, &dstRect);
+        SDL_RenderTexture(sdlRenderer, sdlTexture, NULL, &dstRect);
         VNCRuntimeDrawMacOSCursor(sdlRenderer, cursorScreenX, cursorScreenY, finalScale);
         SDL_RenderPresent(sdlRenderer);
 

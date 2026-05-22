@@ -9,7 +9,7 @@
 #import "ScrcpyClientWrapper.h"
 #import "ScrcpyCommon.h"
 #import "ScrcpyVNCAudioPlayer.h"
-#import <SDL2/SDL.h>
+#import <SDL3/SDL.h>
 #import <rfb/rfbclient.h>
 #import <rfb/keysym.h>
 #import <stdlib.h>

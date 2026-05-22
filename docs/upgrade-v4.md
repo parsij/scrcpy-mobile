@@ -135,6 +135,31 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### iOS app SDL2→SDL3 sweep（Phase 4.1）
+
+仓库范围内所有 ObjC/C 源（不含 build/ 中间产物）做了 SDL3 迁移。涉及：
+
+- `#import <SDL2/...>` → `<SDL3/...>` 全量替换（15 个文件）。
+- 事件类型扁平化：`SDL_QUIT`→`SDL_EVENT_QUIT`、`SDL_KEYDOWN/UP`→`SDL_EVENT_KEY_DOWN/UP`、`SDL_CLIPBOARDUPDATE`→`SDL_EVENT_CLIPBOARD_UPDATE`、`SDL_TEXTINPUT`→`SDL_EVENT_TEXT_INPUT`，以及所有 `SDL_WINDOWEVENT_*` 系列改成 `SDL_EVENT_WINDOW_*` 直接挂在 `event.type`（不再嵌 `event.window.event`）。`SDL_DISPLAYEVENT` / `SDL_WINDOWEVENT` 外层 case 删除。
+- 键盘事件结构：`SDL_Keysym`/`event.key.keysym.sym|scancode|mod` → `event.key.key|scancode|mod`；`state = SDL_PRESSED` → `down = true/false`；`repeat = '\0'` → `repeat = false`。
+- 修饰键：`KMOD_*` → `SDL_KMOD_*`。
+- 渲染：
+  - `SDL_RenderSetScale` → `SDL_SetRenderScale`
+  - `SDL_RenderCopy` → `SDL_RenderTexture`（参数从 `SDL_Rect *` 改 `SDL_FRect *`）
+  - `SDL_CreateRenderer(window, -1, flags)` → `SDL_CreateRenderer(window, NULL)` + `SDL_SetRenderVSync(renderer, 1)`
+  - `SDL_ScaleModeLinear` → `SDL_SCALEMODE_LINEAR`
+- 文本输入：`SDL_StartTextInput()` / `SDL_StopTextInput()` → 同名但要传 `SDL_Window *`，本仓库统一用 `SDL_GetKeyboardFocus()`。
+- 音频（VNCAudioPlayer 重写）：
+  - `SDL_AudioDeviceID` + `SDL_OpenAudioDevice` + `wanted.samples/callback/userdata` → `SDL_AudioStream *` + `SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, cb, ud)`，由 stream 自带 callback，callback 内通过 `SDL_PutAudioStreamData` 送数据。
+  - `SDL_PauseAudioDevice(dev, 0/1)` → `SDL_ResumeAudioStreamDevice` / `SDL_PauseAudioStreamDevice`。
+  - `SDL_CloseAudioDevice` → `SDL_DestroyAudioStream`（关 stream 即关底层 device）。
+  - `AUDIO_S16SYS` → `SDL_AUDIO_S16`。
+  - `SDL_MixAudioFormat(dst, src, fmt, len, intvol)` → `SDL_MixAudio(dst, src, fmt, len, floatvol)`。
+- pbxproj 链接 flag：`-lSDL2` → `-lSDL3`。
+- 顺手修了一处旧代码 bug：`if (!sdlRenderer)` 实际应是 `if (!*sdlRenderer)`（`sdlRenderer` 是 `SDL_Renderer **`）。
+
+无法在本环境跑 xcodebuild（项目 CLAUDE.md 规定），等用户实测构建。
+
 ### 其余 porting 文件适配（Phase 3.3）
 
 剩下的 porting 文件（`controller-porting.c`、`decoder-porting.c`、`demuxer-porting.c`、`audio_player-porting.c`、`audio_regulator-porting.c`、`main-porting.c`、`process-porting.c`/`.cpp`）在 v4.0 + SDL3 下**无需任何修改即可编译通过** —— hijack 函数名与签名都没变。
