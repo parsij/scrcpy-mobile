@@ -82,6 +82,22 @@ build_target() {
     rm -rf "$OUTPUT/include/SDL3"
     cp -rv "$install_dir/include/SDL3" "$OUTPUT/include/"
 
+    # On the OS64 (real-device arm64) pass, also stage a pkg-config file so
+    # scrcpy's host meson setup can satisfy its dependency('sdl3', ...) check
+    # purely against our staged tree. The pkg-config file's prefix is rewritten
+    # to point at $OUTPUT so it is location-independent.
+    if [ "$platform" = "OS64" ]; then
+        mkdir -p "$OUTPUT/lib/pkgconfig"
+        sed "s|^prefix=.*|prefix=$OUTPUT|" \
+            "$install_dir/lib/pkgconfig/sdl3.pc" \
+            > "$OUTPUT/lib/pkgconfig/sdl3.pc"
+        # The .a we want pkg-config to advertise lives under iphoneos/arm64,
+        # not the default lib/. Override libdir for that.
+        sed -i.bak "s|^libdir=.*|libdir=$OUTPUT/iphoneos/arm64|" \
+            "$OUTPUT/lib/pkgconfig/sdl3.pc"
+        rm -f "$OUTPUT/lib/pkgconfig/sdl3.pc.bak"
+    fi
+
     cd "$BUILD_DIR"
 }
 

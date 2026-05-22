@@ -135,6 +135,14 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### scrcpy client 源切到 v4.0（Phase 3.1）
+
+- `scrcpy` submodule pointer 升到 tag `v4.0`（commit 2322868）。
+- meson setup 在 host (macOS) 上验证：v4.0 `app/meson.build` 增加了 `dependency('sdl3', version: '>= 3.2.0', ...)`，原 `scrcpy-config` target 直接报 `Dependency "sdl3" not found`。
+- 解决：`make-libsdl.sh` 在 OS64 pass 时额外把 `sdl3.pc` 拷到 `porting/libs/lib/pkgconfig/`，并把 `prefix=`/`libdir=` 重写到 `porting/libs`+`iphoneos/arm64` 的绝对路径。`scrcpy-config` target 改为 `PKG_CONFIG_PATH=$$PWD/../porting/libs/lib/pkgconfig:... meson setup`。
+- 该 PKG_CONFIG_PATH 仅供 meson dependency 检测使用；真正的 iOS 链接由 `porting/cmake` 完成。
+- `config.h` 生成正常；`HAVE_REALLOCARRAY` 在 macOS host 上为 NO（host clang 17 未声明），但 iOS 11+ 实际支持 — 该差异先按 host 值走，若 Phase 3.3 联编时遇到 `reallocarray` 调用失败再单独修。
+
 ### SDL2 2.32.8 → SDL3 3.4.8（Phase 2.2）
 
 - SDL3 仍保留 `Xcode/SDL/SDL.xcodeproj`，但**只剩 framework 产物**（`PBXNativeTarget "SDL3"`, productType=framework），没有 "Static Library-iOS" scheme。

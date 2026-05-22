@@ -1,7 +1,8 @@
 all: adb-mobile libsdl ffmpeg scrcpy scrcpy-server ish
 
 scrcpy-config:
-	cd ../scrcpy && meson setup x --reconfigure --buildtype=release --strip -Db_lto=true -Dusb=false
+	cd ../scrcpy && PKG_CONFIG_PATH=$$PWD/../porting/libs/lib/pkgconfig:$$PKG_CONFIG_PATH \
+		meson setup x --reconfigure --buildtype=release --strip -Db_lto=true -Dusb=false
 
 mkdir-output:
 	[[ ! -d libs ]] && mkdir -pv libs || echo ""
