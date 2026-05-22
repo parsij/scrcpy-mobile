@@ -100,7 +100,8 @@ add_library( # Sets the name of the library.
         ../src/decoder-porting.c
         ../../scrcpy/app/src/events.c
         ../../scrcpy/app/src/device_msg.c
-        ../../scrcpy/app/src/input_manager.c
+        # ../../scrcpy/app/src/input_manager.c — hijacked
+        ../src/input_manager-porting.c
         ../../scrcpy/app/src/icon.c
         # ../../scrcpy/app/src/audio_player.c
         ../src/audio_player-porting.c
