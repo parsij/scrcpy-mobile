@@ -135,6 +135,29 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### Phase 5 — 全量回归测试待办（用户实测）
+
+代码侧迁移已结束（Phase 0–4 全部 commit）。用户负责在真机上跑完整回归矩阵：
+
+**编译验证**：
+1. Xcode 打开 `Scrcpy Remote.xcodeproj`，确保 Build Phases 中 SDL2 库已被 SDL3 替换（pbxproj 已把 `-lSDL2` 改为 `-lSDL3`；如果 Frameworks 列表中有具体的 `libSDL2.a` 文件引用，需手动换成 `libSDL3.a`）。
+2. 若链接错误抱怨 `CoreHaptics`：SDL3 的 sdl3.pc 声明了 `-weak_framework CoreHaptics`，可能需要在 Frameworks 中显式添加（weak link）。
+3. 若链接错误抱怨 OpenGLES：SDL3 仍 link OpenGLES，但与 SDL2 旧版的具体 framework 列表略有不同，按 sdl3.pc 的 Libs 行对齐。
+
+**功能矩阵**：
+- 设备：(a) 主流 Android 13/14 手机非 root；(b) root 设备（issue #125 回归 — root 剪贴板不再断连）；(c) 折叠屏（看 v4.0 是否顺带修了 #127 的副屏触摸）；(d) Meta Quest（v4.0 #5913 修复）。
+- iOS：iPad 全屏 / Slide Over / Stage Manager 三种窗口模式触摸映射；iPhone 横竖屏切换。
+- 功能：视频解码（h264/h265），音频，剪贴板双向，文件推送，VNC，自动重连，Fit Device Window，ADB Key 导入。
+- 性能：MediaCodec KEY_PRIORITY/LATENCY (#6670) 应让触摸→显示延迟下降。
+
+**新功能可用性**：
+- aspect-ratio lock (SDL3 自带，应在 iPad floating window 中可见)。
+- `--flex-display`（通过 customFlags 或将来 UI）。
+- `--background-color` 默认深灰。
+- `--keep-active`：保持设备活动而不改全局设置。
+
+发现任何回归一并报回，准备 follow-up commit。
+
 ### Workaround 保留决定（Phase 4.3）
 
 复审 3 个候选撤回项后决定**全部保留**：
