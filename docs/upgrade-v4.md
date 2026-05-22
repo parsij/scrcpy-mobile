@@ -135,6 +135,18 @@
 - `h264_slice.c` colorspace patch 仍然需要（hunk header 行号从 799/842 改为 811/873，fuzz 也能匹配但显式更新更稳）。
 - porting/src 没有直接引用任何被废弃的 FFmpeg API（`->channels` / `av_init_packet` / 等），所以升级 FFmpeg 后我们 porting 层不需要随动；scrcpy v4 上游源已经 FFmpeg 8 兼容。
 
+### 其余 porting 文件适配（Phase 3.3）
+
+剩下的 porting 文件（`controller-porting.c`、`decoder-porting.c`、`demuxer-porting.c`、`audio_player-porting.c`、`audio_regulator-porting.c`、`main-porting.c`、`process-porting.c`/`.cpp`）在 v4.0 + SDL3 下**无需任何修改即可编译通过** —— hijack 函数名与签名都没变。
+
+唯一需要补的是 `scrcpy-porting.c`：
+- 增加 `#include <SDL3/SDL.h>`（这里需要 `SDL_Event` / `SDL_InitFlags` / `SDL_EVENT_QUIT` 等类型/常量）。
+- `event.type = SDL_QUIT` → `SDL_EVENT_QUIT`。
+- `SDL_Init_hijack` 改签名为 `bool SDL_Init_hijack(SDL_InitFlags)`（SDL3 把 `SDL_Init` 改成返回 `bool`，参数类型 `SDL_InitFlags`）。
+- forward declare `static bool SDL_Init_hijack(SDL_InitFlags)`，并把宏定义改成 `#define SDL_Init(f) SDL_Init_hijack(f)`，让 `#include "scrcpy.c"` 时它能找到实际类型。
+
+三个 ABI 全量 build 通过：iphoneos/arm64 (2.62 MB)、iphonesimulator/arm64 (2.63 MB)、iphonesimulator/x86_64 (2.53 MB)。
+
 ### display / screen / util/sdl / texture porting 重写（Phase 3.2）
 
 display.c 在 v4.0 被删除，其逻辑拆入了 `screen.c` 与新增的 `texture.c` / `util/sdl.c`。

@@ -5,11 +5,15 @@
 //  Created by Ethan on 2022/6/2.
 //
 
+#include <SDL3/SDL.h>
+
 #include "scrcpy-porting.h"
+
+static bool SDL_Init_hijack(SDL_InitFlags flags);
 
 #define sc_server_init(...)     sc_server_init_hijack(__VA_ARGS__)
 //#define sc_delay_buffer_init(...)     sc_delay_buffer_init_hijack(__VA_ARGS__)
-#define SDL_Init(...)     SDL_Init_hijack(__VA_ARGS__)
+#define SDL_Init(f)     SDL_Init_hijack(f)
 
 #include "scrcpy.c"
 
@@ -36,7 +40,7 @@ sc_server_on_disconnected_hijack(struct sc_server *server, void *userdata) {
 
     // Fixed here, send quit event
     SDL_Event event;
-    event.type = SDL_QUIT;
+    event.type = SDL_EVENT_QUIT;
     SDL_PushEvent(&event);
 
     // Notify update status
@@ -80,12 +84,12 @@ sc_server_init_hijack(struct sc_server *server, const struct sc_server_params *p
 //    db->stopped = false;
 //}
 
-// Handle SDL_Init to post setup key window
-int SDL_Init(Uint32 flags);
-int SDL_Init_hijack(Uint32 flags) {
-    int ret = SDL_Init(flags);
-    if (ret == 0) {
+// Handle SDL_Init to post setup key window.
+// SDL3 changed SDL_Init to return bool (true on success) and take SDL_InitFlags.
+static bool SDL_Init_hijack(SDL_InitFlags flags) {
+    bool ok = SDL_Init(flags);
+    if (ok) {
         ScrcpyUpdateStatus(ScrcpyStatusSDLInited, "SDL Inited");
     }
-    return ret;
+    return ok;
 }
