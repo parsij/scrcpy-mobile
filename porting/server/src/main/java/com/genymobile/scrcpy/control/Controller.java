@@ -101,6 +101,11 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final Object displayDataAvailable = new Object(); // condition variable
 
     private long lastTouchDown;
+    // Mark: smoothed event time for the primary-touch path. Lets fast
+    // bursts of MOVEs over a slow / jittery network arrive at Android
+    // with even ~60 Hz spacing, otherwise the platform merges or drops
+    // them. v3 had this and it carried real-world benefit over cellular.
+    private long lastTouchCont;
     private final PointersState pointersState = new PointersState();
     private final MotionEvent.PointerProperties[] pointerProperties = new MotionEvent.PointerProperties[PointersState.MAX_POINTERS];
     private final MotionEvent.PointerCoords[] pointerCoords = new MotionEvent.PointerCoords[PointersState.MAX_POINTERS];
@@ -550,6 +555,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         if (pointerCount == 1) {
             if (action == MotionEvent.ACTION_DOWN) {
                 lastTouchDown = now;
+                lastTouchCont = now;
             }
         } else {
             // secondary pointers must use ACTION_POINTER_* ORed with the pointerIndex
@@ -616,8 +622,16 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
             }
         }
 
-        MotionEvent event = MotionEvent.obtain(lastTouchDown, now, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
+        MotionEvent event = MotionEvent.obtain(lastTouchDown, lastTouchCont, action, pointerCount, pointerProperties, pointerCoords, 0, buttons, 1f, 1f,
                 DEFAULT_DEVICE_ID, 0, source, 0);
+        // Mark: keep inter-event delta near a 60 Hz tick so Android sees
+        // an evenly-spaced stream even when network jitter clumps the
+        // input messages together. Carries over from v3.
+        if (now - lastTouchCont <= 18) {
+            lastTouchCont = now;
+        } else {
+            lastTouchCont += 16.666;
+        }
         return Device.injectEvent(event, targetDisplayId, Device.INJECT_MODE_ASYNC);
     }
 
