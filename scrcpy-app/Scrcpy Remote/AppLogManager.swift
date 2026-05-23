@@ -68,13 +68,27 @@ class AppLogManager: ObservableObject {
         let logPath = getCurrentLogFilePath()
 
         // 重定向 stdout 和 stderr 到日志文件
-        if freopen(logPath.cString(using: .ascii), "a+", stderr) != nil &&
-           freopen(logPath.cString(using: .ascii), "a+", stdout) != nil {
+        // Use UTF-8 (not ASCII) for the path to avoid a nil cString when
+        // the sandbox container path contains a non-ASCII byte. Open each
+        // stream independently — the previous && chain meant a failed
+        // stderr redirect silently skipped the stdout one.
+        let pathC = (logPath as NSString).utf8String
+        let okErr = freopen(pathC, "a+", stderr) != nil
+        let okOut = freopen(pathC, "a+", stdout) != nil
+        if okErr || okOut {
             isLoggingActive = true
             currentLogFilePath = logPath
 
+            // freopen on a non-TTY defaults to fully-buffered, so printf()
+            // bytes can sit in an 8 KB block forever. Force line buffering
+            // so every '\n' flushes to disk — that's what the "no logs to
+            // read" UI report turned out to be.
+            setvbuf(stdout, nil, _IOLBF, 0)
+            setvbuf(stderr, nil, _IOLBF, 0)
+
             // 记录开始日志的时间戳
             print("=== Scrcpy Remote Log Started: \(Date()) ===")
+            fflush(stdout); fflush(stderr)
 
             updateLogStatistics()
         }
@@ -160,19 +174,27 @@ class AppLogManager: ObservableObject {
     
     /// 读取当前最新的指定行数日志
     func readLatestLogs(lineCount: Int = 1000) -> String {
+        // Flush stdio so freshly-printed lines actually reach the file
+        // before we read it; without this, even with line buffering an
+        // in-flight write can lag the disk view.
+        if isLoggingActive {
+            fflush(stdout)
+            fflush(stderr)
+        }
+
         let currentPath = getCurrentLogFilePath()
-        
+
         guard FileManager.default.fileExists(atPath: currentPath) else {
             return "No log file found at: \(currentPath)"
         }
-        
+
         guard let content = try? String(contentsOfFile: currentPath, encoding: .utf8) else {
             return "Failed to read log file"
         }
-        
+
         let lines = content.components(separatedBy: .newlines)
         let recentLines = Array(lines.suffix(lineCount))
-        
+
         return recentLines.joined(separator: "\n")
     }
     

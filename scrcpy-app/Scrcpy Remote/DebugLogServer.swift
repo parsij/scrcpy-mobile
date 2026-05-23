@@ -3,19 +3,23 @@
 //  Scrcpy Remote
 //
 //  DEBUG-only HTTP endpoint on port 4321 that exposes the running app's
-//  stdout / stderr line stream for live debugging from a host machine
-//  (browser, curl, scripted poller).
+//  log files for live debugging from a host machine.
 //
-//  Design goals:
-//    - Capture without disturbing the existing AppLogManager file
-//      pipeline: we splice into stdout / stderr via pipe(2) + dup2(),
-//      tee bytes back to the original fds, and into an in-memory ring
-//      buffer keyed by monotonic line number.
+//  Design v2 (file-backed):
+//    - The previous in-memory ring buffer fed by stdout/stderr splicing
+//      collided with AppLogManager's freopen()-based file redirection:
+//      whichever one ran second won the fd, and the other got nothing.
+//      The new design reads straight from AppLogManager's on-disk files,
+//      which is what the rest of the app already trusts as the source of
+//      truth for runtime logs.
+//    - When no file path is specified, the "current" / newest file is
+//      used. Endpoints accept a file= query (by name) to target older
+//      files.
 //    - Self-describing root endpoint so future endpoints can be added
-//      without breaking callers (progressive disclosure).
-//    - Single TCP listener via Network.framework; no third-party deps.
+//      without breaking callers.
 //
-//  Created 2026-05 for the v4.0 upgrade touch-event debugging.
+//  Note: DebugLogServer only forces AppLogManager.shared to start
+//  logging on app launch (otherwise no file exists to read from).
 //
 
 #if DEBUG
@@ -24,169 +28,32 @@ import Foundation
 import Network
 
 private let kDebugLogServerPort: NWEndpoint.Port = 4321
-private let kDebugLogRingCapacity = 5000   // lines
-private let kDebugLogMaxLineBytes = 8192   // truncate longer lines
-
-/// One captured log line with its monotonic sequence number and capture
-/// timestamp (ms since 1970).
-struct DebugLogLine: Codable {
-    let seq: UInt64       // monotonic, never resets
-    let ts: UInt64        // ms since 1970 (UTC)
-    let stream: String    // "stdout" | "stderr"
-    let line: String
-}
+private let kMaxLines = 50000
+private let kMaxByteWindow = 8 * 1024 * 1024  // 8 MB tail window
 
 final class DebugLogServer {
     static let shared = DebugLogServer()
 
     private let queue = DispatchQueue(label: "scrcpy.debuglog.server")
-    private let ringQueue = DispatchQueue(label: "scrcpy.debuglog.ring",
-                                          attributes: .concurrent)
-
-    // Ring buffer of captured lines.
-    private var ring: [DebugLogLine] = []
-    private var nextSeq: UInt64 = 0
-
     private var listener: NWListener?
     private var clients: [ObjectIdentifier: NWConnection] = [:]
 
-    // Splicing state.
-    private var stdoutTeeFd: Int32 = -1
-    private var stderrTeeFd: Int32 = -1
-    private var stdoutReadSrc: DispatchSourceRead?
-    private var stderrReadSrc: DispatchSourceRead?
-
     private init() {}
 
-    /// Heap-allocated holder for the per-stream pending byte buffer so an
-    /// @escaping dispatch event handler can mutate it across firings.
-    private final class DataBox {
-        var data = Data()
-    }
-
-    /// Start capture + HTTP listener. Idempotent.
+    /// Start the HTTP listener and ensure file logging is on so there's
+    /// something to read.
     func start() {
         queue.async { [weak self] in
             guard let self = self else { return }
             guard self.listener == nil else { return }
-            self.installStdoutCapture()
+
+            // Force AppLogManager on so log files exist for us to read.
+            let mgr = AppLogManager.shared
+            if !mgr.isLoggingEnabled {
+                DispatchQueue.main.async { mgr.toggleLogging(true) }
+            }
+
             self.startHTTPListener()
-        }
-    }
-
-    // MARK: - stdout / stderr splicing
-
-    private func installStdoutCapture() {
-        if let s = installSplice(forFd: STDOUT_FILENO, streamLabel: "stdout") {
-            self.stdoutTeeFd = s.teeFd
-            self.stdoutReadSrc = s.src
-        }
-        if let s = installSplice(forFd: STDERR_FILENO, streamLabel: "stderr") {
-            self.stderrTeeFd = s.teeFd
-            self.stderrReadSrc = s.src
-        }
-    }
-
-    private struct SpliceHandles {
-        let teeFd: Int32
-        let src: DispatchSourceRead
-    }
-
-    /// Replace `targetFd` with a pipe writer. A reader thread drains the
-    /// pipe, splits on \n, appends to ring, and forwards bytes verbatim
-    /// to the original fd (saved via dup) so the existing
-    /// AppLogManager-style file redirection still sees them.
-    private func installSplice(forFd targetFd: Int32,
-                               streamLabel: String) -> SpliceHandles?
-    {
-        // Dup the original fd so we can tee bytes back to it after
-        // capturing them.
-        let originalFd = dup(targetFd)
-        if originalFd < 0 {
-            return nil
-        }
-
-        // Create a pipe; writes to targetFd now flow into pipefd[0].
-        var pipefd: [Int32] = [-1, -1]
-        if pipe(&pipefd) != 0 {
-            close(originalFd)
-            return nil
-        }
-        // Redirect targetFd to the pipe's write end.
-        if dup2(pipefd[1], targetFd) < 0 {
-            close(pipefd[0]); close(pipefd[1]); close(originalFd)
-            return nil
-        }
-        close(pipefd[1])
-
-        let readFd = pipefd[0]
-
-        // Non-blocking on the read side.
-        let flags = fcntl(readFd, F_GETFL, 0)
-        _ = fcntl(readFd, F_SETFL, flags | O_NONBLOCK)
-
-        let src = DispatchSource.makeReadSource(fileDescriptor: readFd, queue: queue)
-
-        // Pending buffer per stream lives in a class-scoped box so the
-        // closure can mutate it across event firings without capturing
-        // a non-escaping parameter.
-        let pendingBox = DataBox()
-        src.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            var buf = [UInt8](repeating: 0, count: 4096)
-            while true {
-                let n = buf.withUnsafeMutableBufferPointer { ptr -> Int in
-                    return read(readFd, ptr.baseAddress, ptr.count)
-                }
-                if n <= 0 { break }
-                let chunk = Data(bytes: buf, count: n)
-                // Tee to the original fd so file logging still works.
-                chunk.withUnsafeBytes { raw in
-                    var remaining = n
-                    var base = raw.baseAddress!
-                    while remaining > 0 {
-                        let w = write(originalFd, base, remaining)
-                        if w <= 0 { break }
-                        remaining -= w
-                        base = base.advanced(by: w)
-                    }
-                }
-                pendingBox.data.append(chunk)
-                self.flushLines(from: &pendingBox.data, stream: streamLabel)
-            }
-        }
-        src.setCancelHandler {
-            close(readFd)
-            close(originalFd)
-        }
-        src.resume()
-        return SpliceHandles(teeFd: originalFd, src: src)
-    }
-
-    private func flushLines(from buf: inout Data, stream: String) {
-        while let nlIdx = buf.firstIndex(of: 0x0A /* \n */) {
-            let lineBytes = buf.prefix(upTo: nlIdx)
-            let truncated = lineBytes.count > kDebugLogMaxLineBytes
-                ? lineBytes.prefix(kDebugLogMaxLineBytes)
-                : lineBytes
-            let line = String(decoding: truncated, as: UTF8.self)
-            appendLine(line, stream: stream)
-            buf.removeSubrange(buf.startIndex...nlIdx)
-        }
-    }
-
-    private func appendLine(_ line: String, stream: String) {
-        ringQueue.async(flags: .barrier) {
-            let entry = DebugLogLine(
-                seq: self.nextSeq,
-                ts: UInt64(Date().timeIntervalSince1970 * 1000),
-                stream: stream,
-                line: line)
-            self.nextSeq &+= 1
-            self.ring.append(entry)
-            if self.ring.count > kDebugLogRingCapacity {
-                self.ring.removeFirst(self.ring.count - kDebugLogRingCapacity)
-            }
         }
     }
 
@@ -202,17 +69,9 @@ final class DebugLogServer {
             }
             lst.start(queue: queue)
             self.listener = lst
-            // Tee directly to original stdout so this message survives our
-            // own splice (write to teeFd, not stdout, to avoid recursion).
-            let msg = "🛰️ DebugLogServer listening on http://0.0.0.0:4321/\n"
-            if let data = msg.data(using: .utf8) {
-                data.withUnsafeBytes { raw in
-                    _ = write(self.stdoutTeeFd >= 0 ? self.stdoutTeeFd : STDERR_FILENO,
-                              raw.baseAddress, raw.count)
-                }
-            }
+            NSLog("🛰️ DebugLogServer listening on http://0.0.0.0:4321/")
         } catch {
-            // Fail silently — DEBUG-only convenience.
+            NSLog("🛰️ DebugLogServer failed to start: \(error)")
         }
     }
 
@@ -239,20 +98,21 @@ final class DebugLogServer {
             sendError(conn, status: 400, message: "Bad Request"); return
         }
         let target = String(parts[1])
-
         let (path, query) = splitPathQuery(target)
 
         switch path {
         case "/":
             sendIndex(conn)
+        case "/v1/files":
+            sendFilesList(conn)
         case "/v1/logs/info":
-            sendInfo(conn)
+            sendInfo(conn, query: query)
         case "/v1/logs/tail":
             sendTail(conn, query: query)
-        case "/v1/logs/since":
-            sendSince(conn, query: query)
-        case "/v1/logs/page":
-            sendPage(conn, query: query)
+        case "/v1/logs/grep":
+            sendGrep(conn, query: query)
+        case "/v1/logs/raw":
+            sendRaw(conn, query: query)
         default:
             sendError(conn, status: 404, message: "Not Found: \(path)")
         }
@@ -266,137 +126,224 @@ final class DebugLogServer {
             "version": "v1",
             "build": "DEBUG",
             "port": 4321,
+            "data_source": "AppLogManager on-disk log files",
             "endpoints": [
                 [
                     "method": "GET",
                     "path": "/",
-                    "desc": "This index. Self-describing list of endpoints."
+                    "desc": "Self-describing list of endpoints + params."
+                ],
+                [
+                    "method": "GET",
+                    "path": "/v1/files",
+                    "desc": "List all known log files. Identifies the current one.",
                 ],
                 [
                     "method": "GET",
                     "path": "/v1/logs/info",
-                    "desc": "Buffer capacity, current line count, earliest/latest seq+ts.",
-                    "params": [:]
+                    "desc": "Stats for a log file: path, size, mtime, line count (approx).",
+                    "params": [
+                        "file": "string, log file name (e.g. Scrcpy_Remote_4.4.4_2026-05-23.log); defaults to newest"
+                    ]
                 ],
                 [
                     "method": "GET",
                     "path": "/v1/logs/tail",
-                    "desc": "Most recent N captured lines (oldest first in result).",
+                    "desc": "Last N lines of a log file.",
                     "params": [
-                        "n": "int, default 200, max = ring capacity"
+                        "n": "int, default 500, max \(kMaxLines)",
+                        "file": "string, log file name; defaults to newest"
                     ]
                 ],
                 [
                     "method": "GET",
-                    "path": "/v1/logs/since",
-                    "desc": "Lines captured at or after a given monotonic seq OR ms-epoch timestamp.",
+                    "path": "/v1/logs/grep",
+                    "desc": "Lines matching a substring in a log file's tail window (last \(kMaxByteWindow/1024/1024) MB).",
                     "params": [
-                        "seq": "uint64, return lines where seq >= value",
-                        "t":   "uint64 ms-since-epoch, return lines where ts >= value",
-                        "limit": "int, default 1000, max = ring capacity",
-                        "note": "exactly one of seq / t is required"
+                        "q": "string, substring to match (required)",
+                        "n": "int, default 500, max \(kMaxLines)",
+                        "case_sensitive": "bool, default false",
+                        "file": "string, log file name; defaults to newest"
                     ]
                 ],
                 [
                     "method": "GET",
-                    "path": "/v1/logs/page",
-                    "desc": "Page through the ring. offset is a seq number; next_offset is returned for the following page.",
+                    "path": "/v1/logs/raw",
+                    "desc": "Raw text dump of the file's tail window (no line truncation). Streams text/plain.",
                     "params": [
-                        "offset": "uint64 seq, default = earliest available",
-                        "limit":  "int, default 500, max = ring capacity"
+                        "file": "string, log file name; defaults to newest"
                     ]
                 ]
-            ],
-            "response_format": [
-                "tail": "{ count: int, lines: [DebugLogLine] }",
-                "since": "{ count: int, lines: [DebugLogLine] }",
-                "page": "{ count: int, lines: [DebugLogLine], next_offset: uint64|null }",
-                "DebugLogLine": "{ seq: uint64, ts: uint64 (ms epoch), stream: 'stdout'|'stderr', line: string }"
             ]
         ]
         sendJSON(conn, status: 200, object: body)
     }
 
-    private func sendInfo(_ conn: NWConnection) {
-        ringQueue.sync {
-            let info: [String: Any] = [
-                "capacity": kDebugLogRingCapacity,
-                "count": ring.count,
-                "next_seq": nextSeq,
-                "earliest_seq": ring.first?.seq ?? NSNull(),
-                "earliest_ts": ring.first?.ts ?? NSNull(),
-                "latest_seq": ring.last?.seq ?? NSNull(),
-                "latest_ts": ring.last?.ts ?? NSNull()
-            ]
-            sendJSON(conn, status: 200, object: info)
+    private func sendFilesList(_ conn: NWConnection) {
+        let mgr = AppLogManager.shared
+        let files = mgr.getLogFilesList()
+        let body: [String: Any] = [
+            "logging_enabled": mgr.isLoggingEnabled,
+            "current_file": (files.first { $0.isCurrentLog }?.fileName) ?? NSNull(),
+            "current_path": mgr.getCurrentLogFilePath(),
+            "count": files.count,
+            "files": files.map { f -> [String: Any] in
+                [
+                    "name": f.fileName,
+                    "path": f.filePath,
+                    "size": f.fileSize,
+                    "modified_ms": Int64(f.modificationDate.timeIntervalSince1970 * 1000),
+                    "is_current": f.isCurrentLog
+                ]
+            }
+        ]
+        sendJSON(conn, status: 200, object: body)
+    }
+
+    private func sendInfo(_ conn: NWConnection, query: [String: String]) {
+        guard let resolved = resolveFile(query) else {
+            sendError(conn, status: 404, message: "No log file available"); return
         }
+        // Flush stdio so we get the latest bytes before reading.
+        fflush(stdout); fflush(stderr)
+        let attrs = (try? FileManager.default.attributesOfItem(atPath: resolved.path)) ?? [:]
+        let size = (attrs[.size] as? Int64) ?? 0
+        let mtime = (attrs[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+        // Line count: only meaningful for the last window — counting all
+        // bytes of a 100 MB file would be too expensive.
+        let window = readTailWindow(path: resolved.path, maxBytes: kMaxByteWindow)
+        let approxLines = window.reduce(into: 0) { acc, b in if b == 0x0A { acc += 1 } }
+        let body: [String: Any] = [
+            "file": resolved.name,
+            "path": resolved.path,
+            "size": size,
+            "modified_ms": mtime,
+            "window_bytes_read": window.count,
+            "window_lines_approx": approxLines,
+            "tail_window_bytes": kMaxByteWindow
+        ]
+        sendJSON(conn, status: 200, object: body)
     }
 
     private func sendTail(_ conn: NWConnection, query: [String: String]) {
-        let n = clampLimit(query["n"], defaultValue: 200)
-        ringQueue.sync {
-            let slice = Array(ring.suffix(n))
-            sendJSONLines(conn, lines: slice)
+        guard let resolved = resolveFile(query) else {
+            sendError(conn, status: 404, message: "No log file available"); return
         }
-    }
-
-    private func sendSince(_ conn: NWConnection, query: [String: String]) {
-        let limit = clampLimit(query["limit"], defaultValue: 1000)
-        let predicate: (DebugLogLine) -> Bool
-        if let s = query["seq"], let seq = UInt64(s) {
-            predicate = { $0.seq >= seq }
-        } else if let s = query["t"], let ts = UInt64(s) {
-            predicate = { $0.ts >= ts }
-        } else {
-            sendError(conn, status: 400, message: "missing 'seq' or 't'"); return
-        }
-        ringQueue.sync {
-            let filtered = ring.filter(predicate).prefix(limit)
-            sendJSONLines(conn, lines: Array(filtered))
-        }
-    }
-
-    private func sendPage(_ conn: NWConnection, query: [String: String]) {
-        let limit = clampLimit(query["limit"], defaultValue: 500)
-        ringQueue.sync {
-            let offset = UInt64(query["offset"] ?? "") ?? (ring.first?.seq ?? 0)
-            let slice = ring.drop(while: { $0.seq < offset }).prefix(limit)
-            let arr = Array(slice)
-            let nextOffset: Any = (arr.count == limit && arr.last != nil)
-                ? (arr.last!.seq &+ 1) as Any
-                : NSNull()
-            let body: [String: Any] = [
-                "count": arr.count,
-                "next_offset": nextOffset,
-                "lines": arr.map(serializeLine)
-            ]
-            sendJSON(conn, status: 200, object: body)
-        }
-    }
-
-    // MARK: - helpers
-
-    private func clampLimit(_ raw: String?, defaultValue: Int) -> Int {
-        let parsed = raw.flatMap { Int($0) } ?? defaultValue
-        return max(1, min(parsed, kDebugLogRingCapacity))
-    }
-
-    private func serializeLine(_ l: DebugLogLine) -> [String: Any] {
-        [
-            "seq": l.seq,
-            "ts": l.ts,
-            "stream": l.stream,
-            "line": l.line
-        ]
-    }
-
-    private func sendJSONLines(_ conn: NWConnection, lines: [DebugLogLine]) {
+        let n = max(1, min(Int(query["n"] ?? "") ?? 500, kMaxLines))
+        fflush(stdout); fflush(stderr)
+        let lines = readTailLines(path: resolved.path, n: n)
         let body: [String: Any] = [
+            "file": resolved.name,
             "count": lines.count,
-            "lines": lines.map(serializeLine)
+            "lines": lines
         ]
         sendJSON(conn, status: 200, object: body)
     }
+
+    private func sendGrep(_ conn: NWConnection, query: [String: String]) {
+        guard let q = query["q"], !q.isEmpty else {
+            sendError(conn, status: 400, message: "missing 'q'"); return
+        }
+        guard let resolved = resolveFile(query) else {
+            sendError(conn, status: 404, message: "No log file available"); return
+        }
+        let n = max(1, min(Int(query["n"] ?? "") ?? 500, kMaxLines))
+        let caseSensitive = (query["case_sensitive"] ?? "false").lowercased() == "true"
+        fflush(stdout); fflush(stderr)
+        let needle = caseSensitive ? q : q.lowercased()
+        let allLines = readTailLines(path: resolved.path, n: kMaxLines)
+        var matches: [String] = []
+        for line in allLines {
+            let hay = caseSensitive ? line : line.lowercased()
+            if hay.contains(needle) {
+                matches.append(line)
+                if matches.count >= n { break }
+            }
+        }
+        let body: [String: Any] = [
+            "file": resolved.name,
+            "q": q,
+            "case_sensitive": caseSensitive,
+            "count": matches.count,
+            "lines": matches
+        ]
+        sendJSON(conn, status: 200, object: body)
+    }
+
+    private func sendRaw(_ conn: NWConnection, query: [String: String]) {
+        guard let resolved = resolveFile(query) else {
+            sendError(conn, status: 404, message: "No log file available"); return
+        }
+        fflush(stdout); fflush(stderr)
+        let window = readTailWindow(path: resolved.path, maxBytes: kMaxByteWindow)
+        sendResponse(conn, status: 200,
+                     contentType: "text/plain; charset=utf-8",
+                     body: window)
+    }
+
+    // MARK: - file resolution + reading
+
+    private struct ResolvedFile {
+        let name: String
+        let path: String
+    }
+
+    /// If the caller passed file=NAME, look it up in AppLogManager's list.
+    /// Otherwise return the newest file (which is also the current one if
+    /// logging is on).
+    private func resolveFile(_ query: [String: String]) -> ResolvedFile? {
+        let mgr = AppLogManager.shared
+        let list = mgr.getLogFilesList()
+        if let name = query["file"], !name.isEmpty {
+            if let hit = list.first(where: { $0.fileName == name }) {
+                return ResolvedFile(name: hit.fileName, path: hit.filePath)
+            }
+            return nil
+        }
+        // Default: newest (the list is sorted by modificationDate desc).
+        if let newest = list.first {
+            return ResolvedFile(name: newest.fileName, path: newest.filePath)
+        }
+        // Fall back to current-path even if file doesn't exist yet.
+        let cur = mgr.getCurrentLogFilePath()
+        return ResolvedFile(name: (cur as NSString).lastPathComponent, path: cur)
+    }
+
+    /// Read at most `maxBytes` from the tail of `path` and return the
+    /// bytes verbatim (UTF-8 boundary safe because we only chop at
+    /// LF boundaries below in readTailLines).
+    private func readTailWindow(path: String, maxBytes: Int) -> Data {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return Data() }
+        defer { try? handle.close() }
+        do {
+            let size = try handle.seekToEnd()
+            let start = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+            try handle.seek(toOffset: start)
+            return (try handle.readToEnd()) ?? Data()
+        } catch {
+            return Data()
+        }
+    }
+
+    /// Read tail and return last n lines (oldest first in result).
+    private func readTailLines(path: String, n: Int) -> [String] {
+        let window = readTailWindow(path: path, maxBytes: kMaxByteWindow)
+        guard !window.isEmpty else { return [] }
+        // Split on LF, drop a possible empty trailing slot.
+        let text = String(decoding: window, as: UTF8.self)
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        if lines.last == "" { lines.removeLast() }
+        // Drop the first chunk (it may have started mid-line due to the
+        // tail-window cut).
+        if lines.count > 1 { lines.removeFirst() }
+        if lines.count > n {
+            lines = Array(lines.suffix(n))
+        }
+        return lines
+    }
+
+    // MARK: - HTTP helpers
 
     private func sendJSON(_ conn: NWConnection, status: Int, object: Any) {
         let data: Data
@@ -453,7 +400,6 @@ final class DebugLogServer {
     private func jsonEscape(_ s: String) -> String {
         if let data = try? JSONSerialization.data(withJSONObject: [s], options: []),
            let str = String(data: data, encoding: .utf8) {
-            // [".."] -> ".."
             let trimmed = str.dropFirst().dropLast()
             return String(trimmed)
         }

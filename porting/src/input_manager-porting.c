@@ -2,43 +2,80 @@
 //  input_manager-porting.c
 //  scrcpy-module
 //
-//  iOS / SDL3 fixup: normalise the per-finger pressure value before
-//  the upstream input_manager forwards it to scrcpy-server.
+//  iOS / SDL3 fixup: SDL3's iOS backend reports pressureForTouch: ==
+//  touch.force, which is always 0.0 on devices without 3D / Force
+//  Touch hardware. Every FINGER_DOWN / MOTION then reaches scrcpy with
+//  pressure = 0.0, and Android's MotionEvent.obtain(...,pressure=0,...)
+//  is interpreted by some apps as a hover / non-contact, so quick taps
+//  register as long-presses. SDL2's iOS backend used to fall back to
+//  1.0 for the same input, which is why the regression only appeared
+//  after the SDL2 -> SDL3 upgrade.
 //
-//  SDL3's iOS backend implements pressureForTouch: as simply
-//  `return (float)touch.force` (src/video/uikit/SDL_uikitview.m:329).
-//  iPads / iPhones without Force Touch hardware always report
-//  touch.force == 0.0, so every FINGER_DOWN / MOTION arrives at scrcpy
-//  with pressure=0.0. The server then calls Android's
-//  MotionEvent.obtain(..., pressure=0, ...); some Android versions /
-//  ROMs treat a DOWN with pressure 0 as a hover / non-contact, which
-//  combined with the burst of MOTION events makes a single tap
-//  register as a long-press. SDL2's iOS backend used to fall back to
-//  pressure = 1.0 for the same input, which is why this regression
-//  only appeared after the SDL2 -> SDL3 upgrade.
+//  Implementation: install an SDL_EventFilter that rewrites
+//  event.tfinger.pressure on FINGER_DOWN / MOTION before any scrcpy
+//  code consumes the event. SDL_EVENT_FINGER_UP keeps its upstream
+//  pressure (0.0).
 //
-//  Fix: synthesise pressure = 1.0 for DOWN / MOTION and 0.0 for UP
-//  whenever the SDL3 backend gives us a zero (i.e. no real force
-//  data). Real force values (e.g. on a future Force-Touch capable
-//  device) are passed through untouched.
+//  Why not the usual `#define foo foo_orig` + `#include "input_manager.c"`
+//  hijack on sc_input_manager_process_touch? Because that function is
+//  static and is only called from another static (the dispatcher) in
+//  the same TU — the rename catches both the definition AND the call
+//  site, so an external wrapper of the original name is never reached.
+//  Patching the SDL_Event at the source bypasses that entirely.
 //
 
 #include <SDL3/SDL.h>
+#include <stdio.h>
 
-#define sc_input_manager_process_touch(...) sc_input_manager_process_touch_orig(__VA_ARGS__)
+// Wrap upstream sc_input_manager_init so we can install our event
+// watcher at a known-safe time (post SDL_Init).
+#define sc_input_manager_init sc_input_manager_init_orig
 
 #include "input_manager.c"
 
-#undef sc_input_manager_process_touch
+#undef sc_input_manager_init
 
-static void
-sc_input_manager_process_touch(struct sc_input_manager *im,
-                               const SDL_TouchFingerEvent *event) {
-    // Patch pressure in-place via a local copy: the upstream callee
-    // only reads event->pressure.
-    SDL_TouchFingerEvent fixed = *event;
-    if (fixed.pressure <= 0.0f) {
-        fixed.pressure = (event->type == SDL_EVENT_FINGER_UP) ? 0.0f : 1.0f;
+static bool SDLCALL sc_finger_pressure_watch(void *userdata, SDL_Event *event) {
+    (void)userdata;
+
+    // Promote SDL3's FINGER_CANCELED to FINGER_UP. scrcpy's
+    // input_manager dispatcher (input_manager.c:1189-1192) only handles
+    // DOWN / UP / MOTION explicitly; CANCELED falls through silently,
+    // which leaves the server-side virtual finger in the DOWN state
+    // forever. iOS triggers CANCELED whenever a system gesture
+    // (Slide Over edge, control center, incoming alert, multi-finger
+    // recognizer conflict) steals the touch from us, so this happens
+    // surprisingly often during regular taps.
+    if (event->type == SDL_EVENT_FINGER_CANCELED) {
+        event->type = SDL_EVENT_FINGER_UP;
+        event->tfinger.type = SDL_EVENT_FINGER_UP;
+        event->tfinger.pressure = 0.0f;
+        return true;
     }
-    sc_input_manager_process_touch_orig(im, &fixed);
+
+    if (event->type == SDL_EVENT_FINGER_DOWN ||
+        event->type == SDL_EVENT_FINGER_MOTION) {
+        if (event->tfinger.pressure <= 0.0f) {
+            event->tfinger.pressure = 1.0f;
+        }
+    }
+    return true;
+}
+
+static bool g_finger_watch_installed = false;
+
+void
+sc_input_manager_init(struct sc_input_manager *im,
+                      const struct sc_input_manager_params *params) {
+    sc_input_manager_init_orig(im, params);
+
+    // First call installs the watcher. SDL3 hooks are FIFO so this
+    // runs before any downstream consumer (input_manager dispatcher,
+    // mouse_sdk's process_touch, etc.) sees the event.
+    if (!g_finger_watch_installed) {
+        g_finger_watch_installed = true;
+        SDL_AddEventWatch(sc_finger_pressure_watch, NULL);
+        printf("🖐️ finger-pressure SDL_EventWatch installed\n");
+        fflush(stdout);
+    }
 }
