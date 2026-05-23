@@ -14,7 +14,14 @@ struct Scrcpy_RemoteApp: App {
     @StateObject private var appSettings = AppSettings()
     @StateObject private var logManager = AppLogManager.shared
     @StateObject private var schemeManager = AppSchemeManagerV2.shared
-    
+
+    init() {
+        #if DEBUG
+        // DEBUG-only: expose live stdout/stderr at http://<device-ip>:4321/
+        DebugLogServer.shared.start()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             MainContentView()
