@@ -116,7 +116,9 @@ void sc_store_thread(pid_t pid, std::thread *thread) {
 
 void sc_remove_thread(pid_t pid) {
     std::lock_guard<std::mutex> lock(sc_thread_map_mutex);
-    sc_thread_map[pid] = nullptr;
+    // Plain erase: do not pre-insert pid -> nullptr first, the v3-era
+    // sequence here was equivalent (and the spurious insert just made
+    // the assert path easier to hit under contention).
     sc_thread_map.erase(pid);
 }
 
@@ -210,9 +212,17 @@ void adb_process_thread_func(bool *thread_started, pid_t pid, const char *thread
         printf("> result:\n(empty)\n");
     }
 
-    // Remove from sc_thread_map
-    sc_thread_map.erase(pid);
-    sc_thread_map[pid] = nullptr;
+    // Remove from sc_thread_map.
+    // Must be under the same mutex as every other read/write of the map,
+    // otherwise the std::map red-black tree can be torn between this
+    // thread's erase and a concurrent reader/writer, tripping libc++'s
+    // __tree_invariant assert. Also, do NOT re-insert pid -> nullptr
+    // after erasing it (the v3-era line below would otherwise leak a
+    // stale nullptr entry that later cleanup paths would erase again).
+    {
+        std::lock_guard<std::mutex> lock(sc_thread_map_mutex);
+        sc_thread_map.erase(pid);
+    }
 }
 
 int
