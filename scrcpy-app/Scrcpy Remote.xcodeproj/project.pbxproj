@@ -812,7 +812,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../porting/libs/$(PLATFORM_NAME)/$(ARCHS)";
-				MARKETING_VERSION = 4.4.4;
+				MARKETING_VERSION = 4.5.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
 					"-lSDL3",
@@ -874,7 +874,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../porting/libs/$(PLATFORM_NAME)/$(ARCHS)";
-				MARKETING_VERSION = 4.4.4;
+				MARKETING_VERSION = 4.5.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
 					"-lSDL3",
@@ -967,8 +967,8 @@
 					"-lvncclient",
 					"-lcrypto",
 					"-lSDL3",
-						"-framework",
-						CoreBluetooth,
+					"-framework",
+					CoreBluetooth,
 					"-lavcodec",
 					"-lavutil",
 					"-lswresample",
@@ -1021,8 +1021,8 @@
 					"-lvncclient",
 					"-lcrypto",
 					"-lSDL3",
-						"-framework",
-						CoreBluetooth,
+					"-framework",
+					CoreBluetooth,
 					"-lavcodec",
 					"-lavutil",
 					"-lswresample",
