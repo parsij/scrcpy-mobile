@@ -203,6 +203,10 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
                     print("⏰ [SessionConnectionManager] Connection start time recorded: \(self.connectionStartTime!)")
                 }
 
+                // 启用后台保活的静音音频（在 SDL audio session 起来之后,
+                // 我们用 .playback + .mixWithOthers 覆盖,与 scrcpy/VNC 音频共存）。
+                BackgroundKeepAliveManager.shared.sessionConnected()
+
                 // 连接成功后,如果启用了自动重连,保存当前会话
                 self.saveCurrentSessionIfAutoReconnectEnabled()
 
@@ -213,7 +217,7 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.cleanupCallbacksAfterSuccess()
                 }
-                
+
             case ScrcpyStatusSDLWindowCreated:
                 print("✅ [SessionConnectionManager] Status: SDL Window Created")
                 self.isConnecting = false
@@ -223,6 +227,8 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
                     self.connectionStartTime = Date()
                     print("⏰ [SessionConnectionManager] Connection start time recorded: \(self.connectionStartTime!)")
                 }
+
+                BackgroundKeepAliveManager.shared.sessionConnected()
 
                 // 连接成功后,如果启用了自动重连,保存当前会话
                 self.saveCurrentSessionIfAutoReconnectEnabled()
@@ -716,6 +722,10 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
         connectionStatus = ScrcpyStatusDisconnected
         isConnecting = false
         connectionStartTime = nil
+
+        // Stop the silent-audio keep-alive engine if it was running —
+        // there is nothing left to keep alive once the session is gone.
+        BackgroundKeepAliveManager.shared.sessionDisconnected()
 
         // 当没有已连接的session时,清除保存的上次连接session
         // 避免下次重连了上次成功过但已经主动断开过的连接

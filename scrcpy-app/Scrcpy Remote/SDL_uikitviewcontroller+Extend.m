@@ -28,7 +28,8 @@ extern NSString * const ScrcpyRemoteOrientationChangedNotification;
 static CGSize g_lastKnownViewSize = {0, 0};
 
 @interface SDL_uikitviewcontroller () <ScrcpyMenuViewDelegate>
-@property (nonatomic, assign)   NSInteger  homeIndicatorHidden;
+// NOTE: homeIndicatorHidden is SDL3's own ivar; we drive it through
+// SDL_HINT_IOS_HIDE_HOME_INDICATOR rather than redeclaring it here.
 @end
 
 @implementation SDL_uikitviewcontroller (Extend)
@@ -215,10 +216,40 @@ static char orientationLockEnabledKey;
     g_lastKnownViewSize = currentViewSize;
 }
 
+// MARK: - Home indicator + edge gesture handling
+//
+// IMPORTANT: do NOT override prefersHomeIndicatorAutoHidden /
+// preferredScreenEdgesDeferringSystemGestures here. SDL3's own
+// SDL_uikitviewcontroller already implements both, driven by its
+// private `homeIndicatorHidden` ivar:
+//
+//   homeIndicatorHidden == 0  -> indicator shown,  edges = None
+//   homeIndicatorHidden == 1  -> indicator hidden, edges = None
+//   homeIndicatorHidden == 2  -> indicator hidden, edges = UIRectEdgeAll
+//   homeIndicatorHidden <  0  -> indicator default, edges = All if fullscreen
+//
+// A category that re-implements the same selectors collides with SDL's
+// implementation (undefined which one the runtime keeps) AND can't see
+// SDL's ivar value anyway. In SDL2 a fullscreen window defaulted to
+// deferring all screen edges; in SDL3 the ivar defaults to 0, so the
+// edge-defer path returns None and a single bottom swipe drops straight
+// to the iOS home screen mid-session.
+//
+// The supported way to drive SDL's ivar is the hint
+// SDL_HINT_IOS_HIDE_HOME_INDICATOR, whose value is assigned verbatim to
+// homeIndicatorHidden. We set it to "2" so the indicator hides AND the
+// bottom/side edges are deferred — the user must swipe twice to leave.
+
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
-    
+
+    // Hide the home indicator (value 1) AND defer the system screen-edge
+    // gestures (value 2) so a single bottom swipe is captured by scrcpy
+    // instead of bouncing to the iOS home screen. SDL's hint callback
+    // updates its viewcontroller and calls the setNeedsUpdate methods.
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+
     // Initialize the ScrappyMenuView with appropriate size
     __weak typeof(self) weakSelf = self;
     self.menuView = [[ScrcpyMenuView alloc] initWithFrame:CGRectZero]; // Frame will be set correctly during initialization
@@ -361,8 +392,9 @@ static char orientationLockEnabledKey;
     // Unlock orientation when view is about to be unloaded
     [self unlockOrientation];
 
-    self.homeIndicatorHidden = 0;
-    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+    // Restore default home-indicator / edge-gesture behaviour via SDL's
+    // hint (value 0 = indicator shown, edges not deferred).
+    SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "0");
     NSLog(@"Reset ViewControllers HomeIndicatorAutoHidden.");
 }
 

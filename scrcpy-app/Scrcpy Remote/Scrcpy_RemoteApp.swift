@@ -20,6 +20,11 @@ struct Scrcpy_RemoteApp: App {
         // DEBUG-only: expose live stdout/stderr at http://<device-ip>:4321/
         DebugLogServer.shared.start()
         #endif
+        // Wire up the silent-audio keep-alive observer (no-op until a
+        // session connects). Required because SDL's default AVAudioSession
+        // category is .ambient, which iOS immediately suspends in
+        // background even with UIBackgroundModes=audio.
+        BackgroundKeepAliveManager.shared.setup()
     }
 
     var body: some Scene {
