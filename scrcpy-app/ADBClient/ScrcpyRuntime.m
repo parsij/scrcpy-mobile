@@ -26,6 +26,10 @@ typedef enum : NSUInteger {
 
 static ScrcpyHardwareDecodingType bScrcpyHardwareDecodingEnabled = ScrcpyHardwareDecodingLayerRender;
 
+// Application background state. Written from the main thread (app lifecycle),
+// read from scrcpy's decoder/demuxer thread, so it is _Atomic.
+static _Atomic(BOOL) bApplicationInBackground = NO;
+
 // Follow remote orientation change feature
 static BOOL bFollowRemoteOrientation = NO;
 static int lastFrameWidth = 0;
@@ -54,6 +58,23 @@ float ScrcpyRenderScreenScale(void)
 
 void SetScrcpyHardwareDecodingEnabled(BOOL enabled) {
     bScrcpyHardwareDecodingEnabled = enabled ? ScrcpyHardwareDecodingLayerRender : ScrcpyHardwareDecodingDisabled;
+}
+
+void SetApplicationBackgroundState(BOOL inBackground) {
+    bApplicationInBackground = inBackground;
+    NSLog(@"[ScrcpyRuntime] SetApplicationBackgroundState → %@", inBackground ? @"background" : @"foreground");
+}
+
+// Read the cached background flag. When `update` is true, refresh it from the
+// live UIApplication state first (safe to call from any thread). Used by
+// decoder-porting.c to decide whether a decode error is an iOS-induced
+// VideoToolbox session loss (background) rather than a real stream failure.
+bool GetUpdateApplicationBackgroundState(bool update) {
+    if (update) {
+        bApplicationInBackground =
+            (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground);
+    }
+    return bApplicationInBackground ? true : false;
 }
 
 void SetScrcpyFollowRemoteOrientation(BOOL enabled) {

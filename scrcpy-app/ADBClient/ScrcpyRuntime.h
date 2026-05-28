@@ -27,3 +27,13 @@ BOOL IsRemoteOrientationKnown(void);
 // Request video reset (sends Ctrl+Shift+R to scrcpy to request a new keyframe)
 // Used for recovering from render failures or decoder overload
 void ScrcpyTryResetVideo(void);
+
+// Application background-state flag shared with the C porting layer.
+//   - SetApplicationBackgroundState(YES/NO): called from app lifecycle.
+//   - GetUpdateApplicationBackgroundState(update): reads the flag; when
+//     `update` is true it also re-reads UIApplication.applicationState.
+// decoder-porting.c uses this to know when iOS has likely invalidated the
+// VideoToolbox decode session, so a decode error can be swallowed instead of
+// tearing the whole connection down.
+void SetApplicationBackgroundState(BOOL inBackground);
+bool GetUpdateApplicationBackgroundState(bool update);

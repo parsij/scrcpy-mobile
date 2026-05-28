@@ -165,6 +165,14 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             object: nil
         )
         
+        // 监听应用即将进入前台（比 didBecomeActive 更早），尽早清除后台标志
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplicationWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+
         // 监听应用变为活跃
         NotificationCenter.default.addObserver(
             self,
@@ -172,6 +180,11 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+    }
+
+    @objc private func handleApplicationWillEnterForeground() {
+        // Earliest foreground signal — clear the background flag right away.
+        SetApplicationBackgroundState(false)
     }
     
     @objc private func handleScrcpyStatusUpdate(_ notification: Notification) {
@@ -289,6 +302,14 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     }
     
     @objc private func handleApplicationDidEnterBackground() {
+        // Set the background flag synchronously, before anything else. The
+        // VideoToolbox decode session dies the instant we background, and the
+        // decoder thread can hit avcodec_receive_frame's error path within a
+        // few ms. BackgroundKeepAlive.evaluate() also sets this, but it runs
+        // async via Combine (.receive(on:)) — too late. This direct @objc
+        // observer fires synchronously when iOS posts the notification.
+        SetApplicationBackgroundState(true)
+
         print("📱 [SessionConnectionManager] ========================================")
         print("📱 [SessionConnectionManager] Application did enter background")
         print("📱 [SessionConnectionManager] ========================================")
@@ -343,6 +364,11 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     }
 
     @objc private func handleApplicationDidBecomeActive() {
+        // Clear the background flag synchronously and as early as possible, so
+        // a genuine decode error right after foregrounding is not wrongly
+        // suppressed as a background VT-session loss.
+        SetApplicationBackgroundState(false)
+
         print("📱 [SessionConnectionManager] ========================================")
         print("📱 [SessionConnectionManager] Application did become active")
         print("📱 [SessionConnectionManager] ========================================")

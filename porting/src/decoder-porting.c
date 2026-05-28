@@ -98,5 +98,25 @@ int avcodec_receive_frame_hijack(AVCodecContext *avctx, AVFrame *frame) {
 		ScrcpyHandleFrame(frame);
         return 0;
     }
+    // When the app is in background, iOS invalidates the VideoToolbox hardware
+    // decoder session (kVTInvalidSessionErr -12903). The next
+    // avcodec_receive_frame then fails with AVERROR_EXTERNAL (-542398533).
+    // Propagating that error makes scrcpy v4's sc_decoder_push() return false,
+    // the demuxer breaks out of its loop ("end of frames") and the whole
+    // connection drops. EAGAIN / EOF are legitimate "no frame yet" signals and
+    // must pass through untouched.
+    //
+    // Swallow only genuine errors, and only while backgrounded: return EAGAIN
+    // so the caller simply retries on the next packet. Video resumes on
+    // foreground via ScrcpyTryResetVideo().
+    if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        bool inBg = GetUpdateApplicationBackgroundState(false);
+        fprintf(stderr, "[decoder-porting] receive_frame error ret=%d bg=%d\n",
+                ret, (int)inBg);
+        if (inBg) {
+            fprintf(stderr, "[decoder-porting] suppressing VT error → EAGAIN\n");
+            return AVERROR(EAGAIN);
+        }
+    }
     return ret;
 }

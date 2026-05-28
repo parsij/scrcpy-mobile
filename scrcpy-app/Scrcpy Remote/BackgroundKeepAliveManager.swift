@@ -159,6 +159,11 @@ final class BackgroundKeepAliveManager: ObservableObject {
         let shouldPlay = sessionActive
         print("🔋 BackgroundKeepAlive evaluate(reason=\(reason)) → session=\(sessionActive) bg=\(appIsInBackground) playing=\(silentAudioActive) shouldPlay=\(shouldPlay)")
 
+        // Mirror our background state to the C porting layer so the decoder
+        // hijack can tell an iOS-induced VideoToolbox session loss apart from
+        // a genuine stream failure (see decoder-porting.c).
+        SetApplicationBackgroundState(appIsInBackground)
+
         if shouldPlay && !silentAudioActive {
             startSilentAudio()
         } else if !shouldPlay && silentAudioActive {
