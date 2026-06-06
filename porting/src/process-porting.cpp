@@ -21,6 +21,10 @@
 
 extern "C" {
 #include "adb_public.h"
+int adb_commandline_porting_safe(char **output_buffer,
+                                 size_t *output_buffer_size,
+                                 int argc,
+                                 const char **argv);
 }
 
 static inline int array_len(const char *arr[]) {
@@ -167,7 +171,7 @@ void adb_process_thread_func(bool *thread_started, pid_t pid, const char *thread
     size_t output_size = 0;
 
     std::thread commandline_thread = std::thread([argc, &argv, &result, &output_size, &success]() {
-        int ret_code = adb_commandline_porting(&result, &output_size, argc, argv);
+        int ret_code = adb_commandline_porting_safe(&result, &output_size, argc, argv);
         success = ret_code == 0;
     });
     commandline_thread.join();

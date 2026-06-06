@@ -145,7 +145,15 @@ static const CGFloat kKeyButtonSpacing = 6.0;
 }
 
 - (void)hide {
-    // Remove from superview
+    // If we are already detached (e.g. the session view-controller is being
+    // torn down while the keyboard is still minimising) skip the animation —
+    // running an animateWithDuration: against a view with no window can
+    // rethrow from NSISEngine.withBehaviors:performModifications: when the
+    // constraint engine has already been disconnected.
+    if (!self.window || !self.superview) {
+        [self removeFromSuperview];
+        return;
+    }
     [UIView animateWithDuration:0.1 animations:^{
         self.alpha = 0.0;
     } completion:^(BOOL finished) {
@@ -297,6 +305,12 @@ static const CGFloat kKeyButtonSpacing = 6.0;
 }
 
 - (void)hideKeyboardToolbarWithNotification:(NSNotification *)notification {
+    // Same guard as -hide: skip the toolbar fade when we're already off-window
+    // so we don't pump the AutoLayout engine after it's been disconnected.
+    if (!self.window || !self.toolbarView) {
+        self.toolbarVisible = NO;
+        return;
+    }
     NSDictionary *info = notification.userInfo ?: @{};
     NSTimeInterval duration = [info[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
     UIViewAnimationCurve curve = [info[UIKeyboardAnimationCurveUserInfoKey] integerValue];

@@ -10,6 +10,15 @@
 #import <sys/socket.h>
 #import <netinet/in.h>
 
+// C++-exception-safe wrapper around adb_commandline_porting. Defined in
+// porting/src/adb-safe-porting.cpp; catches std::system_error from
+// std::thread::join() inside adb_server_cleanup → kick_all_transports →
+// ReconnectHandler::Stop so a failed worker join no longer SIGABRTs the app.
+extern int adb_commandline_porting_safe(char **output_buffer,
+                                         size_t *output_buffer_size,
+                                         int argc,
+                                         const char **argv);
+
 #define kADBConnectStatusUpdated    @"ADBConnectStatusUpdated"
 
 void adb_connect_status_updated(const char *serial, const char *status)
@@ -173,7 +182,7 @@ void adb_connect_status_updated(const char *serial, const char *status)
     for (int i = 0; i < commands.count; i++) {
         argv[i] = [NSString stringWithFormat:@"%@", commands[i]].UTF8String;
     }
-    int ret = adb_commandline_porting(&output, &output_size, (int)commands.count, argv);
+    int ret = adb_commandline_porting_safe(&output, &output_size, (int)commands.count, argv);
     if (returnCode) { *returnCode = ret; }
     NSLog(@"> adb_commandline_porting [%@]\n> return code: %d\n> output text:\n%s",
           [commands componentsJoinedByString:@" "], ret, output);

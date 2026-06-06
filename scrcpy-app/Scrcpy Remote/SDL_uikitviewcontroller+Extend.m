@@ -626,6 +626,18 @@ static char orientationLockEnabledKey;
 
 - (void)keyboardWillHide:(NSNotification *)notification {
     // 当键盘隐藏时，隐藏工具栏并移除输入遮罩视图
+    //
+    // Guard: if our view controller is no longer in a window (the session is
+    // exiting while the keyboard is still minimising) the inputMaskView is
+    // about to be detached from a window that no longer participates in any
+    // AutoLayout engine. Running the hide animation here can rethrow an
+    // NSISEngine exception from inside withBehaviors:performModifications:
+    // (field crash "Crashed when exiting port with minimized keyboard").
+    // Drop the animation in that case — viewDidDisappear/dealloc removes the
+    // overlay anyway.
+    if (!self.view.window || !self.inputMaskView.window) {
+        return;
+    }
     [self.inputMaskView hideKeyboardToolbarWithNotification:notification];
     [self.inputMaskView hide];
 }

@@ -391,8 +391,27 @@ class TailscaleManager {
         return true
     }
     
-    /// Sets up a timer to maintain connection for 10 minutes
+    /// Sets up a timer to maintain connection for 10 minutes.
+    ///
+    /// Foundation's Timer is NOT thread-safe and must only be invalidated /
+    /// scheduled on the runloop it lives on (main here). This is reachable
+    /// from Swift Concurrency completion threads (SessionNetworking →
+    /// ensureConnected) and racing two threads on `connectionTimer` produced
+    /// the field crash:
+    ///   TailscaleManager.setupKeepAliveTimer +36 → CFRunLoopTimerInvalidate
+    ///   → CFRetain → CF_IS_OBJC (pointer-auth DA fault)
+    /// Always hop to main before touching the timer.
     private func setupKeepAliveTimer() {
+        if Thread.isMainThread {
+            performSetupKeepAliveTimer()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.performSetupKeepAliveTimer()
+            }
+        }
+    }
+
+    private func performSetupKeepAliveTimer() {
         connectionTimer?.invalidate()
         connectionTimer = Timer.scheduledTimer(withTimeInterval: connectionKeepAliveSeconds, repeats: false) { [weak self] _ in
             self?.handleConnectionTimeout()
@@ -469,8 +488,7 @@ class TailscaleManager {
     /// Clean up all Tailscale connections
     /// - Returns: Number of connections cleaned up
     func cleanup() -> Int32 {
-        connectionTimer?.invalidate()
-        connectionTimer = nil
+        invalidateConnectionTimerOnMain()
         lastConnectionTime = nil
         
         // Stop all forwards before cleanup
@@ -739,7 +757,30 @@ class TailscaleManager {
     }
     
     deinit {
-        connectionTimer?.invalidate()
+        // deinit may run on any thread; hop to main before touching the timer.
+        let timer = connectionTimer
+        connectionTimer = nil
+        if let timer = timer {
+            if Thread.isMainThread {
+                timer.invalidate()
+            } else {
+                DispatchQueue.main.async {
+                    timer.invalidate()
+                }
+            }
+        }
+    }
+
+    private func invalidateConnectionTimerOnMain() {
+        if Thread.isMainThread {
+            connectionTimer?.invalidate()
+            connectionTimer = nil
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.connectionTimer?.invalidate()
+                self?.connectionTimer = nil
+            }
+        }
     }
 
     // MARK: - OAuth Functions

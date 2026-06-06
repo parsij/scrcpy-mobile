@@ -37,6 +37,7 @@ add_library( # Sets the name of the library.
         # ../../scrcpy/app/src/util/process.c
         ../src/process-porting.c
         ../src/process-porting.cpp
+        ../src/adb-safe-porting.cpp
         ../../scrcpy/app/src/util/rand.c
         ../../scrcpy/app/src/util/memory.c
         ../../scrcpy/app/src/util/timeout.c
