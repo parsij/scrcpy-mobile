@@ -1827,3 +1827,50 @@ static const CFAbsoluteTime kMinFramebufferRequestInterval = 0.033;  // 最多30
 }
 
 @end
+
+// MARK: - SDL postFinishLaunch hijack (VNCClient framework copy)
+//
+// SDL3 is statically linked SEPARATELY into both the main app binary AND this
+// VNCClient.framework, so there are two distinct SDLUIKitDelegate /
+// SDLUIKitSceneDelegate Class structs at runtime — one per image. The app
+// target's SDLUIKitDelegate+Extend.m category attaches only to the *app's*
+// copy. But ScrcpyVNCClient lives in THIS framework and creates the
+// framework's SDLUIKitDelegate (see -[ScrcpyVNCClient init] /
+// application:didFinishLaunchingWithOptions:), so the app-side override never
+// reaches the class actually used by VNC.
+//
+// SDL3's didFinishLaunchingWithOptions: schedules
+//   [self performSelector:@selector(postFinishLaunch) withObject:nil afterDelay:0.0]
+// and the original postFinishLaunch calls SDL_CallMainFunction(forward_main),
+// where forward_main is only set by SDL_RunApp() — which we never call (we host
+// SDL ourselves). forward_main is therefore NULL, and when the delayed perform
+// fires it jumps to 0x0:
+//   __NSFireDelayedPerform → -[SDLUIKitDelegate postFinishLaunch]+64 → pc=0x0
+//   (codesigning monitor kills the process for the Invalid Page jump, ~1s
+//    after launch)
+//
+// Override both delegate variants here, compiled into the framework, so they
+// bind to the framework's class structs. Plain category overrides — same
+// reliable mechanism the app side uses, no +load swizzle.
+
+@interface SDLUIKitDelegate (VNCExtend)
+@end
+
+@implementation SDLUIKitDelegate (VNCExtend)
+- (void)postFinishLaunch {
+    NSLog(@"SDL Hijacked -[SDLUIKitDelegate postFinishLaunch] (VNCClient framework)");
+}
+@end
+
+@interface SDLUIKitSceneDelegate : NSObject
+@end
+
+@interface SDLUIKitSceneDelegate (VNCExtend)
+- (void)postFinishLaunch;
+@end
+
+@implementation SDLUIKitSceneDelegate (VNCExtend)
+- (void)postFinishLaunch {
+    NSLog(@"SDL Hijacked -[SDLUIKitSceneDelegate postFinishLaunch] (VNCClient framework)");
+}
+@end
