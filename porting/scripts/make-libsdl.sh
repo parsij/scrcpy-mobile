@@ -85,7 +85,18 @@ build_target() {
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$install_dir" \
         -DCMAKE_C_FLAGS="-DCFRunLoopRunInMode=CFRunLoopRunInMode_fix" \
+        -DENABLE_VISIBILITY=ON \
         ../SDL-source
+    # ^ ENABLE_VISIBILITY=ON stops ios.toolchain.cmake from forcing
+    #   -fvisibility=hidden onto every object (its default). SDL2 exported
+    #   everything, and our app relies on that: VNCClient.framework is the
+    #   single SDL owner and re-exports SDL's Obj-C classes
+    #   (SDLUIKitDelegate, SDL_uikitviewcontroller, ...) to the main app, so
+    #   app-side categories (capsule menu, keyboard toolbar, postFinishLaunch
+    #   hijack) attach to the one true class. The hidden default made those
+    #   classes 'private external', forcing the app to link a second SDL copy
+    #   — splitting every SDL class in two and breaking all of the above in
+    #   VNC mode.
 
     cmake --build . --config Release -j8
     cmake --install .

@@ -815,7 +815,6 @@
 				MARKETING_VERSION = 4.5.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
-					"-lSDL3",
 					"-framework",
 					CoreBluetooth,
 					"-ObjC",
@@ -877,7 +876,6 @@
 				MARKETING_VERSION = 4.5.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
-					"-lSDL3",
 					"-framework",
 					CoreBluetooth,
 					"-ObjC",
