@@ -17,8 +17,9 @@ struct Scrcpy_RemoteApp: App {
 
     init() {
         #if DEBUG
-        // DEBUG-only: expose live stdout/stderr at http://<device-ip>:4321/
-        DebugLogServer.shared.start()
+        // DEBUG-only: JSON-RPC harness at http://<device-ip>:6321/
+        // (logs, view tree, sessions/actions CRUD; GET / for method help)
+        DebugHarnessServer.shared.start()
         #endif
         // Wire up the silent-audio keep-alive observer (no-op until a
         // session connects). Required because SDL's default AVAudioSession
