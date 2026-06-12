@@ -274,6 +274,12 @@ struct MainContentView: View {
                     }
                     checkForMigration()
                 }
+                // Session store mutated outside this view (e.g. the DEBUG
+                // harness RPC writing through SessionManager) — re-read it.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: Notification.Name("ScrcpySessionStoreChanged"))) { _ in
+                    reloadSessions()
+                }
                 .onChange(of: connectionManager.isConnecting) { isConnecting in
                     if isConnecting {
                         isNavigationBarHidden = true
@@ -468,6 +474,12 @@ struct MainContentView: View {
                         reloadSessions()
                     }
                     checkForMigration()
+                }
+                // Session store mutated outside this view (e.g. the DEBUG
+                // harness RPC writing through SessionManager) — re-read it.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: Notification.Name("ScrcpySessionStoreChanged"))) { _ in
+                    reloadSessions()
                 }
                 .onChange(of: connectionManager.isConnecting) { isConnecting in
                     if isConnecting {

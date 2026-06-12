@@ -501,6 +501,7 @@ final class DebugHarnessServer {
                 session.useTailscale = Self.boolParam(p, "useTailscale") ?? false
                 Self.applyVNCOptions(p, to: session)
                 SessionManager.shared.saveSession(session)
+                Self.notifySessionStoreChanged()
                 return session.toDict()
             }))
 
@@ -529,6 +530,7 @@ final class DebugHarnessServer {
                 if let v = Self.boolParam(p, "useTailscale") { session.useTailscale = v }
                 Self.applyVNCOptions(p, to: session)
                 SessionManager.shared.saveSession(session)
+                Self.notifySessionStoreChanged()
                 return session.toDict()
             }))
 
@@ -548,6 +550,7 @@ final class DebugHarnessServer {
                                        data: ["hint": "call sessions.list for valid ids"])
                 }
                 SessionManager.shared.deleteSession(id: id)
+                Self.notifySessionStoreChanged()
                 return ["deleted": id.uuidString]
             }))
 
@@ -697,6 +700,15 @@ final class DebugHarnessServer {
     }
 
     // MARK: - Session option helper
+
+    /// SessionManager has no change publisher — the sessions UI keeps a local
+    /// @State copy and only re-reads on explicit reload. Tell it we wrote.
+    private static func notifySessionStoreChanged() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: Notification.Name("ScrcpySessionStoreChanged"), object: nil)
+        }
+    }
 
     /// Apply the optional vnc* / audio* params shared by sessions.create and
     /// sessions.update onto a session's VNCSessionOptions.
