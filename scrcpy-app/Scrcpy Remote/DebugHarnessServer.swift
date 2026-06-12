@@ -465,6 +465,19 @@ final class DebugHarnessServer {
                 SessionManager.shared.loadSessions().map { $0.toDict() }
             }))
 
+        let vncOptionParams = [
+            HarnessParam(name: "vncPassword", type: "string", required: false,
+                         desc: "VNC auth password (deviceType=vnc)"),
+            HarnessParam(name: "vncUser", type: "string", required: false,
+                         desc: "VNC auth username, rarely needed (deviceType=vnc)"),
+            HarnessParam(name: "enableAudio", type: "bool", required: false,
+                         desc: "enable the VNC companion audio stream", defaultValue: "false"),
+            HarnessParam(name: "audioPort", type: "string", required: false,
+                         desc: "audio stream port; empty = default 4901"),
+            HarnessParam(name: "audioBufferMs", type: "int", required: false,
+                         desc: "audio buffer in ms", defaultValue: "100"),
+        ]
+
         list.append(HarnessMethod(
             name: "sessions.create",
             summary: "Create and persist a session.",
@@ -477,13 +490,16 @@ final class DebugHarnessServer {
                              desc: "session display name"),
                 HarnessParam(name: "useTailscale", type: "bool", required: false,
                              desc: "route via Tailscale", defaultValue: "false"),
-            ],
-            example: ["host": "adb://192.168.1.10", "port": "5555", "name": "Pixel"],
+            ] + vncOptionParams,
+            example: ["host": "vnc://tokyo.example.com", "port": "5901",
+                      "name": "Tokyo", "vncPassword": "secret",
+                      "enableAudio": true, "audioPort": "4901"],
             handler: { p in
                 let session = ScrcpySessionModel(host: p["host"] as! String,
                                                  port: p["port"] as! String,
                                                  sessionName: (p["name"] as? String) ?? "")
                 session.useTailscale = Self.boolParam(p, "useTailscale") ?? false
+                Self.applyVNCOptions(p, to: session)
                 SessionManager.shared.saveSession(session)
                 return session.toDict()
             }))
@@ -498,7 +514,7 @@ final class DebugHarnessServer {
                 HarnessParam(name: "port", type: "string", required: false, desc: "new port"),
                 HarnessParam(name: "name", type: "string", required: false, desc: "new display name"),
                 HarnessParam(name: "useTailscale", type: "bool", required: false, desc: "route via Tailscale"),
-            ],
+            ] + vncOptionParams,
             example: ["id": "<uuid-from-sessions.list>", "name": "Pixel 8"],
             handler: { p in
                 let id = UUID(uuidString: p["id"] as! String)!
@@ -511,6 +527,7 @@ final class DebugHarnessServer {
                 if let v = p["port"] as? String { session.port = v }
                 if let v = p["name"] as? String { session.sessionName = v }
                 if let v = Self.boolParam(p, "useTailscale") { session.useTailscale = v }
+                Self.applyVNCOptions(p, to: session)
                 SessionManager.shared.saveSession(session)
                 return session.toDict()
             }))
@@ -677,6 +694,18 @@ final class DebugHarnessServer {
             }))
 
         for m in list { methods[m.name] = m }
+    }
+
+    // MARK: - Session option helper
+
+    /// Apply the optional vnc* / audio* params shared by sessions.create and
+    /// sessions.update onto a session's VNCSessionOptions.
+    private static func applyVNCOptions(_ p: [String: Any], to session: ScrcpySessionModel) {
+        if let v = p["vncPassword"] as? String { session.vncOptions.vncPassword = v }
+        if let v = p["vncUser"] as? String { session.vncOptions.vncUser = v }
+        if let v = boolParam(p, "enableAudio") { session.vncOptions.enableAudio = v }
+        if let v = p["audioPort"] as? String { session.vncOptions.audioPort = v }
+        if let v = intParam(p, "audioBufferMs") { session.vncOptions.audioBufferMs = v }
     }
 
     // MARK: - Action persistence helper
