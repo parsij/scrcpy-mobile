@@ -70,7 +70,64 @@ static char orientationLockEnabledKey;
         }
 
         NSLog(@"📱 [SDL_uikitviewcontroller] Method swizzling completed for supportedInterfaceOrientations");
+
+        // Since the SDL2→SDL3 upgrade, SDL3's Obj-C classes are compiled with
+        // hidden visibility, so VNCClient.framework no longer exports them and
+        // the app had to link its own -lSDL3 — leaving TWO private copies of
+        // SDL_uikitviewcontroller in the process. VNC windows are created by
+        // the framework's SDL, so their root view controller belongs to the
+        // framework's class — and everything this category provides (capsule
+        // menu in viewDidAppear, keyboard toolbar, orientation follow, VNC
+        // tips) is attached to the app's copy and never runs for VNC.
+        // (Same family as the postFinishLaunch crash fixed framework-side.)
+        //
+        // Repair at runtime: whenever an SDL window comes up, re-point any
+        // foreign SDL_uikitviewcontroller instance at the app-side class.
+        // Both classes are compiled from the same SDL3 sources (one
+        // porting/libs/libSDL3.a), so the ivar layout is identical and
+        // object_setClass is safe.
+        [[NSNotificationCenter defaultCenter] addObserverForName:ScrcpyStatusUpdatedNotificationName
+                                                          object:nil
+                                                           queue:NSOperationQueue.mainQueue
+                                                      usingBlock:^(NSNotification *note) {
+            enum ScrcpyStatus status = [note.userInfo[@"status"] intValue];
+            if (status != ScrcpyStatusSDLWindowCreated && status != ScrcpyStatusSDLWindowAppeared) {
+                return;
+            }
+            // Give SDL a beat to attach the window scene / rootViewController.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [SDL_uikitviewcontroller scrcpy_adoptForeignSDLViewControllers];
+            });
+        }];
     });
+}
+
+// Re-point root view controllers that are an SDL_uikitviewcontroller from a
+// DIFFERENT image (VNCClient.framework's private SDL3 copy) at the app-side
+// class so this category's overrides apply to them. If the view is already
+// on screen (its viewDidAppear ran on the framework class, skipping our
+// setup), run the appear-time setup once by hand.
++ (void)scrcpy_adoptForeignSDLViewControllers {
+    Class appClass = [SDL_uikitviewcontroller class];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) { continue; }
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            UIViewController *vc = window.rootViewController;
+            if (!vc || object_getClass(vc) == appClass) { continue; }
+            if (![NSStringFromClass(object_getClass(vc)) isEqualToString:@"SDL_uikitviewcontroller"]) {
+                continue;
+            }
+            object_setClass(vc, appClass);
+            NSLog(@"📱 [SDL_uikitviewcontroller] Adopted framework-side SDL VC %p onto app class", vc);
+
+            SDL_uikitviewcontroller *sdlVC = (SDL_uikitviewcontroller *)vc;
+            if (sdlVC.viewIfLoaded.window != nil && sdlVC.menuView == nil) {
+                NSLog(@"📱 [SDL_uikitviewcontroller] View already on screen, running missed viewDidAppear setup");
+                [sdlVC viewDidAppear:NO];
+            }
+        }
+    }
 }
 
 - (UIInterfaceOrientationMask)scrcpy_supportedInterfaceOrientations {
