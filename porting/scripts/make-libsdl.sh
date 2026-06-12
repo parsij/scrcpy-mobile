@@ -50,6 +50,38 @@ assert new != src, "patch site not found"
 p.write_text(new)
 PY
 
+# METAL_DestroyRenderer dealloc's an UNCOMMITTED command buffer when the
+# renderer is destroyed between a draw and the next RenderPresent (the Metal
+# backend keeps one open encoder/buffer across RunCommandQueue calls and only
+# RenderPresent commits it). That's exactly what happens when scrcpy's event
+# loop exits on device disconnect mid-frame: sc_screen_destroy →
+# SDL_DestroyRenderer → MTLDebugCommandBuffer assertion "MTLCommandBuffer is
+# in an invalid status when being destroyed" (SIGABRT under Metal API
+# validation; undefined behaviour in release). Commit the dangling buffer
+# after ending its encoder.
+python3 - <<'PY'
+import pathlib
+p = pathlib.Path("SDL-source/src/render/metal/SDL_render_metal.m")
+src = p.read_text()
+old = """            if (data.mtlcmdencoder != nil) {
+                [data.mtlcmdencoder endEncoding];
+            }
+
+            DestroyAllPipelines(data.allpipelines, data.pipelinescount);"""
+new = """            if (data.mtlcmdencoder != nil) {
+                [data.mtlcmdencoder endEncoding];
+            }
+            /* scrcpy-mobile: commit any dangling command buffer; destroying
+               one that was never committed trips Metal API validation. */
+            if (data.mtlcmdbuffer != nil) {
+                [data.mtlcmdbuffer commit];
+            }
+
+            DestroyAllPipelines(data.allpipelines, data.pipelinescount);"""
+assert src.count(old) == 1, "METAL_DestroyRenderer patch site not found"
+p.write_text(src.replace(old, new))
+PY
+
 # NOTE: dropped two SDL2-era patches that no longer apply:
 #  - SDL_UpdateCommandGeneration injection in SDL_render.c — SDL3 already
 #    bumps render_command_generation internally in FlushRenderCommands().
