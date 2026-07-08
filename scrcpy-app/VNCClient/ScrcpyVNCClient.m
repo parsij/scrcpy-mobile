@@ -286,9 +286,27 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
 - (void)SDLEventLoop {
     // 运行一小段时间等待其他UI事件
     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, NO);
-    
+
+    // Drop any stale SDL_EVENT_QUIT still sitting in the PROCESS-GLOBAL SDL
+    // event queue. SDL is linked once and shared between the ADB and VNC
+    // sessions, and ADB's -stopScrcpy pushes SDL_EVENT_QUIT on disconnect. If
+    // the user disconnects ADB and immediately connects VNC, that leftover
+    // QUIT (or one synthesised by iOS during the previous VC's unbalanced
+    // appearance transition) would be dequeued here and tear the fresh VNC
+    // window down ~immediately after connect — the "connected but no picture"
+    // bug. Flush it before we start honoring QUIT for this session.
+    SDL_FlushEvent(SDL_EVENT_QUIT);
+
     SDL_SetiOSEventPump(true);
     SDL_Event e;
+
+    // Guard window against a QUIT that slips in just after the flush — e.g.
+    // the previous VC's unbalanced appearance transition can make iOS/SDL
+    // emit a QUIT a few dozen ms into the new session (observed ~173ms after
+    // connect). A genuine disconnect never arrives that fast; it comes via
+    // -disconnect / -stopScrcpy setting forceStop directly. Ignore QUIT for
+    // the first 800ms so it can't tear down a just-established session.
+    const uint64_t quitGuardUntilMs = SDL_GetTicks() + 800;
 
     while (self.connected && !self.forceStop) {
         if (!SDL_PollEvent(&e)) {
@@ -331,6 +349,10 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
                 break;
                 
             case SDL_EVENT_QUIT:
+                if (SDL_GetTicks() < quitGuardUntilMs) {
+                    NSLog(@"🔌 [ScrcpyVNCClient] Ignoring early SDL_EVENT_QUIT within startup guard window");
+                    break;
+                }
                 NSLog(@"🔌 [ScrcpyVNCClient] SDL_EVENT_QUIT event received");
                 self.forceStop = YES;
                 break;
@@ -459,6 +481,11 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     __block SDL_Texture *sdlTexture = NULL;
     __block SDL_Renderer *sdlRenderer = NULL;
     __block SDL_Window *sdlWindow = nil;
+
+    // 安装 libvncclient 日志捕获钩子，并清空上次的失败原因，以便本次连接
+    // 失败时能拿到具体原因（密码错误 / 尝试次数过多 / 连接被拒绝等）。
+    VNCRuntimeInstallLogCapture();
+    VNCRuntimeResetLastFailureReason();
 
     // 初始化VNC客户端
     self.rfbClient = rfbGetClient(8, 3, 4);
@@ -589,12 +616,19 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
             }
             
             weakSelf.rfbClient = NULL;
-            
+
+            // 取 libvncclient 捕获到的具体失败原因（密码错误 / 尝试次数过多 /
+            // 连接被拒绝等），有则用它，否则回退到通用文案，让用户能区分
+            // 是认证问题还是网络问题。
+            NSString *specificReason = VNCRuntimeLocalizedFailureReason();
+            NSString *userMessage = specificReason
+                ?: [NSString stringWithFormat:NSLocalizedString(@"Failed to connect to VNC server %@:%@", nil), host, port];
+
             weakSelf.scrcpyStatus = ScrcpyStatusConnectingFailed;
-            ScrcpyUpdateStatus(ScrcpyStatusConnectingFailed, [[NSString stringWithFormat:@"Failed to connect to VNC server %@:%@", host, port] UTF8String]);
-            
+            ScrcpyUpdateStatus(ScrcpyStatusConnectingFailed, userMessage.UTF8String);
+
             if (completion) {
-                completion(ScrcpyStatusConnectingFailed, @"Failed to connect to VNC server");
+                completion(ScrcpyStatusConnectingFailed, userMessage);
             }
             return;
         }

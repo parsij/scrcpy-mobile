@@ -16,6 +16,116 @@
 #import <stdatomic.h>
 #import <unistd.h>
 #import "ScrcpyVNCClient.h"
+#import <stdarg.h>
+#import <os/lock.h>
+
+// ============================================================================
+// libvncclient 失败原因捕获
+// ============================================================================
+// libvncclient 通过全局函数指针 rfbClientLog / rfbClientErr 输出诊断信息，
+// 其中包含连接/认证失败的具体原因（例如 "VNC connection failed: password
+// check failed!" 或 "VNC authentication failed - too many tries"）。默认实现
+// 只写到 stderr，上层看不到。这里安装一个捕获钩子，保留最近一条原因字符串，
+// 供 rfbInitClient 失败后归类成面向用户的提示。
+
+static char g_lastFailureReason[512] = {0};
+static os_unfair_lock g_reasonLock = OS_UNFAIR_LOCK_INIT;
+static rfbClientLogProc g_originalClientLog = NULL;
+static rfbClientLogProc g_originalClientErr = NULL;
+
+static void VNCRuntimeCaptureLog(const char *format, va_list args) {
+    char line[512];
+    vsnprintf(line, sizeof(line), format, args);
+
+    // 只保留看起来像失败原因的行，避免被后续正常日志覆盖。
+    if (strstr(line, "failed") || strstr(line, "Failed") ||
+        strstr(line, "rejected") || strstr(line, "refused") ||
+        strstr(line, "too many") || strstr(line, "authentication")) {
+        os_unfair_lock_lock(&g_reasonLock);
+        strlcpy(g_lastFailureReason, line, sizeof(g_lastFailureReason));
+        os_unfair_lock_unlock(&g_reasonLock);
+    }
+}
+
+static void VNCRuntimeClientLogHook(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    VNCRuntimeCaptureLog(format, args);
+    va_end(args);
+    if (g_originalClientLog) {
+        va_start(args, format);
+        // 转发到原始实现以保留控制台日志。
+        char buf[1024];
+        vsnprintf(buf, sizeof(buf), format, args);
+        va_end(args);
+        g_originalClientLog("%s", buf);
+    }
+}
+
+static void VNCRuntimeClientErrHook(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    VNCRuntimeCaptureLog(format, args);
+    va_end(args);
+    if (g_originalClientErr) {
+        va_start(args, format);
+        char buf[1024];
+        vsnprintf(buf, sizeof(buf), format, args);
+        va_end(args);
+        g_originalClientErr("%s", buf);
+    }
+}
+
+void VNCRuntimeInstallLogCapture(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        g_originalClientLog = rfbClientLog;
+        g_originalClientErr = rfbClientErr;
+        rfbClientLog = VNCRuntimeClientLogHook;
+        rfbClientErr = VNCRuntimeClientErrHook;
+    });
+}
+
+void VNCRuntimeResetLastFailureReason(void) {
+    os_unfair_lock_lock(&g_reasonLock);
+    g_lastFailureReason[0] = 0;
+    os_unfair_lock_unlock(&g_reasonLock);
+}
+
+NSString *VNCRuntimeLocalizedFailureReason(void) {
+    char reason[512];
+    os_unfair_lock_lock(&g_reasonLock);
+    strlcpy(reason, g_lastFailureReason, sizeof(reason));
+    os_unfair_lock_unlock(&g_reasonLock);
+
+    if (reason[0] == 0) {
+        return nil;
+    }
+
+    // 归类到面向用户的提示。匹配 libvncclient 的原文（rfbproto.c）。
+    if (strstr(reason, "password check failed")) {
+        return NSLocalizedString(@"Authentication failed: incorrect VNC password", nil);
+    }
+    if (strstr(reason, "too many tries") || strstr(reason, "Too many security failures")) {
+        return NSLocalizedString(@"Authentication failed: too many attempts, please retry later", nil);
+    }
+    if (strstr(reason, "authentication failed") || strstr(reason, "authentication")) {
+        return NSLocalizedString(@"VNC authentication failed", nil);
+    }
+    if (strstr(reason, "refused") || strstr(reason, "rejected")) {
+        return NSLocalizedString(@"Connection refused by the VNC server", nil);
+    }
+    // 服务器回传了具体原因（"VNC connection failed: <reason>"），原样附带。
+    char *sep = strstr(reason, "failed: ");
+    if (sep) {
+        NSString *detail = [[NSString stringWithUTF8String:sep + strlen("failed: ")]
+                            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (detail.length > 0) {
+            return [NSString stringWithFormat:NSLocalizedString(@"Connection failed: %@", nil), detail];
+        }
+    }
+    return nil;
+}
 
 // 光标边缘跟随常量定义
 static const int CURSOR_EDGE_THRESHOLD = 20;     // 边缘阈值（像素）- 光标距离屏幕边缘多近时触发跟随

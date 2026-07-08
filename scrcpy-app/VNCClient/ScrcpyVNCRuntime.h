@@ -80,4 +80,21 @@ void VNCRuntimeCheckForContinuousUpdatesMessage(rfbClient* client);
  */
 void VNCRuntimeSetupFinishedFrameBufferUpdateCallback(rfbClient* client, SDL_Texture* sdlTexture, SDL_Renderer* sdlRenderer, SDL_Window* sdlWindow);
 
+/**
+ * 安装 libvncclient 的日志钩子，捕获连接/认证失败的具体原因。
+ * 幂等；应在 rfbInitClient 之前调用一次。
+ */
+void VNCRuntimeInstallLogCapture(void);
+
+/**
+ * 清空已捕获的失败原因（在每次 rfbInitClient 之前调用）。
+ */
+void VNCRuntimeResetLastFailureReason(void);
+
+/**
+ * 返回一个面向用户的失败原因（已本地化归类：密码错误 / 尝试次数过多 /
+ * 连接被拒绝等），若没有可识别的具体原因则返回 nil。
+ */
+NSString * _Nullable VNCRuntimeLocalizedFailureReason(void);
+
 #endif /* ScrcpyVNCRuntime_h */
