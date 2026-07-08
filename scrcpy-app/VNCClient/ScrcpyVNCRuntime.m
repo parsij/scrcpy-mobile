@@ -179,6 +179,15 @@ static rfbBool CustomSetFormatAndEncodings(rfbClient* client) {
 // VNC runtime callback implementations
 
 rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClient, SDL_Window **sdlWindow, SDL_Renderer **sdlRenderer, SDL_Texture **sdlTexture) {
+    // Defensive: the caller runs this from rfbInitClient's MallocFrameBuffer
+    // callback and the ScrcpyVNCClient can be torn down concurrently. A nil
+    // vncClient here means messaging it returns 0/NULL, and a later
+    // `vncClient.rfbClient->field = ...` would write through a bogus pointer.
+    if (client == NULL || vncClient == nil) {
+        NSLog(@"❌ [ScrcpyVNCClient] MallocFrameBuffer: nil client=%p vncClient=%p", client, vncClient);
+        return FALSE;
+    }
+
     int width = client->width, height = client->height, depth = client->format.bitsPerPixel;
 
     // 保存VNC客户端实例引用，以便在回调中访问
@@ -258,7 +267,10 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
                                   sdlFlags);
                                  
     NSLog(@"[VNCScreenDebug] Created SDL window with size: %dx%d", screenWidth, screenHeight);
-    if (!sdlWindow) {
+    // Was `!sdlWindow` — always false since sdlWindow is &local. Check the
+    // actual created window so a failed SDL_CreateWindow doesn't fall through
+    // to dereferencing a NULL window below.
+    if (!*sdlWindow) {
         rfbClientErr("resize: error creating window: %s\n", SDL_GetError());
         return FALSE;
     }
@@ -322,11 +334,15 @@ rfbBool VNCRuntimeMallocFrameBuffer(rfbClient* client, ScrcpyVNCClient *vncClien
     vncClient.currentTexture = *sdlTexture;
 
     // 设置帧缓冲区更新回调（在SDL对象创建后）
-    vncClient.rfbClient->GotFrameBufferUpdate = GotFrameBufferUpdateBlock;
-    VNCRuntimeSetupGotFrameBufferUpdateCallback(vncClient.rfbClient, *sdlTexture, *sdlRenderer, *sdlWindow);
+    // Use the `client` parameter, which libvncclient guarantees is valid for
+    // the duration of this callback, rather than vncClient.rfbClient — the
+    // property can be NULL/stale if a disconnect is racing (the original
+    // crash site, ScrcpyVNCRuntime.m:325: byte write through a bogus pointer).
+    client->GotFrameBufferUpdate = GotFrameBufferUpdateBlock;
+    VNCRuntimeSetupGotFrameBufferUpdateCallback(client, *sdlTexture, *sdlRenderer, *sdlWindow);
 
     // 设置帧缓冲区更新完成回调（在所有矩形更新完成后调用，触发呈现）
-    VNCRuntimeSetupFinishedFrameBufferUpdateCallback(vncClient.rfbClient, *sdlTexture, *sdlRenderer, *sdlWindow);
+    VNCRuntimeSetupFinishedFrameBufferUpdateCallback(client, *sdlTexture, *sdlRenderer, *sdlWindow);
 
     return TRUE;
 }

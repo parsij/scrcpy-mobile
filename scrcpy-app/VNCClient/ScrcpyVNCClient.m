@@ -480,11 +480,23 @@ static NSUInteger sSuppressedIncrementalUpdateLogs = 0;
     // 设置帧缓冲区分配回调
     __weak typeof(self) weakSelf = self;
     GetSet_MallocFrameBufferBlockIMP(self.rfbClient, imp_implementationWithBlock(^rfbBool(rfbClient* client){
-        dispatch_queue_t mainQueue = dispatch_get_main_queue();
-        dispatch_sync(mainQueue, ^{
-            VNCRuntimeMallocFrameBuffer(client, weakSelf, &sdlWindow, &sdlRenderer, &sdlTexture);
+        // This runs on the connection (background) queue while rfbInitClient
+        // is negotiating. If the ScrcpyVNCClient is being torn down at the
+        // same time (user backs out / reconnects), weakSelf may already be
+        // nil or in mid-dealloc. Pin it to a strong ref for the whole
+        // allocation and bail out safely if it's gone — otherwise
+        // VNCRuntimeMallocFrameBuffer dereferences a dead object
+        // (crash: byte write to a tiny bogus address, ScrcpyVNCRuntime.m:325).
+        __block rfbBool ok = FALSE;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.rfbClient == NULL || client == NULL) {
+                NSLog(@"🔌 [ScrcpyVNCClient] MallocFrameBuffer skipped: client torn down");
+                return;
+            }
+            ok = VNCRuntimeMallocFrameBuffer(client, strongSelf, &sdlWindow, &sdlRenderer, &sdlTexture);
         });
-        return TRUE;
+        return ok;
     }));
     self.rfbClient->MallocFrameBuffer = MallocFrameBufferBlock;
     
