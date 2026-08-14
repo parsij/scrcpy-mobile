@@ -105,6 +105,12 @@ void ScrcpyTryResetVideo(void) {
 @property (nonatomic, strong) NSTimer *backgroundTimer;
 @property (nonatomic, assign) NSTimeInterval lastBackgroundCheckTime;
 
+// The single in-flight background task. Tracked so that re-entering the
+// background ends the previous task instead of leaking its handle, and so
+// returning to the foreground releases it immediately rather than waiting
+// for the system expiration callback.
+@property (nonatomic, assign) UIBackgroundTaskIdentifier currentBackgroundTask;
+
 @end
 
 @implementation ScrcpyADBClient
@@ -112,6 +118,9 @@ void ScrcpyTryResetVideo(void) {
 - (instancetype)init {
     self = [super init];
     if (self) {
+        // UIBackgroundTaskInvalid is not 0, so it must be set explicitly.
+        self.currentBackgroundTask = UIBackgroundTaskInvalid;
+
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(onScrcpyStatusUpdated:)
                                                      name:ScrcpyStatusUpdatedNotificationName
@@ -580,39 +589,116 @@ void ScrcpyTryResetVideo(void) {
     [self.sdlDelegate.window makeKeyWindow];
 }
 
+// Resolve the user's configured background-active duration.
+//
+// The value is written by SwiftUI's @AppStorage("settings.background_active_duration")
+// as the BackgroundActiveDuration enum's rawValue string, so it is parsed here
+// from the same key rather than hardcoding a timeout. Returns the duration in
+// seconds, or kBackgroundDurationAlways when the user chose "Always" (never
+// disconnect). Falls back to 5 minutes when unset or unrecognized, matching the
+// Swift-side default of .fiveMinutes.
+static const NSTimeInterval kBackgroundDurationAlways = -1;
+
+- (NSTimeInterval)configuredBackgroundActiveDuration {
+    NSString *rawValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"settings.background_active_duration"];
+
+    NSDictionary<NSString *, NSNumber *> *durations = @{
+        @"1 minute":    @60,
+        @"5 minutes":   @300,
+        @"10 minutes":  @600,
+        @"30 minutes":  @1800,
+        @"1 hour":      @3600,
+        @"Always":      @(kBackgroundDurationAlways),
+    };
+
+    NSNumber *seconds = rawValue ? durations[rawValue] : nil;
+    if (seconds == nil) {
+        NSLog(@"Background active duration unset or unrecognized (%@), defaulting to 5 minutes", rawValue);
+        return 300;
+    }
+
+    return seconds.doubleValue;
+}
+
+- (void)endCurrentBackgroundTask {
+    if (self.currentBackgroundTask == UIBackgroundTaskInvalid) {
+        return;
+    }
+
+    UIBackgroundTaskIdentifier taskIdentifier = self.currentBackgroundTask;
+    self.currentBackgroundTask = UIBackgroundTaskInvalid;
+    [UIApplication.sharedApplication endBackgroundTask:taskIdentifier];
+    NSLog(@"Background task ended: %lu", (unsigned long)taskIdentifier);
+}
+
 - (void)onApplicationDidEnterBackground:(NSNotification *)notification {
     NSTimeInterval beginBackgroundTime = [NSDate date].timeIntervalSince1970;
 
+    // End any task left over from a previous background transition before
+    // starting a new one, so only a single handle is ever outstanding.
+    [self endCurrentBackgroundTask];
+
     // For more time execute in background
-    static void (^beginTaskHandler)(void) = nil;
-    beginTaskHandler = ^{
-        __block UIBackgroundTaskIdentifier taskIdentifier = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"com.mobile.scrcpy-ios.task" expirationHandler:^{
-            [UIApplication.sharedApplication endBackgroundTask:taskIdentifier];
-            NSLog(@"Background task expired: %lu", (unsigned long)taskIdentifier);
-            
-            if (NSDate.date.timeIntervalSince1970 - beginBackgroundTime < 60 * 5) {
-                beginTaskHandler();
-                NSLog(@"Background task expired, but still in background, restart task");
+    // The renewal block must outlive this method (the expiration handler may
+    // fire minutes later), so hold it in a heap box that the block captures
+    // strongly. self is captured weakly to avoid a retain cycle.
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray *handlerBox = [NSMutableArray arrayWithCapacity:1];
+    void (^beginTaskHandler)(void) = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+
+        UIBackgroundTaskIdentifier taskIdentifier = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"com.mobile.scrcpy-ios.task" expirationHandler:^{
+            __strong typeof(weakSelf) innerSelf = weakSelf;
+            if (innerSelf == nil) {
                 return;
             }
 
-            NSLog(@"Background task expired, not in background, stop session");
-            [self stopScrcpy];
+            NSLog(@"Background task expired: %lu", (unsigned long)innerSelf.currentBackgroundTask);
+            [innerSelf endCurrentBackgroundTask];
+
+            // Keep renewing the task while the user's configured background
+            // duration has not elapsed. Previously this compared against a
+            // hardcoded 5 minutes, which cut longer configured durations short.
+            NSTimeInterval allowedDuration = [innerSelf configuredBackgroundActiveDuration];
+            BOOL withinAllowedDuration = (allowedDuration == kBackgroundDurationAlways) ||
+                (NSDate.date.timeIntervalSince1970 - beginBackgroundTime < allowedDuration);
+
+            void (^renewTask)(void) = handlerBox.firstObject;
+            if (withinAllowedDuration && renewTask != nil) {
+                renewTask();
+                NSLog(@"Background task expired, but still within allowed duration, restart task");
+                return;
+            }
+
+            NSLog(@"Background task expired, allowed duration elapsed, stop session");
+            [innerSelf stopScrcpy];
         }];
+
+        strongSelf.currentBackgroundTask = taskIdentifier;
         NSLog(@"Application did enter background with task identifier: %lu", (unsigned long)taskIdentifier);
     };
+    [handlerBox addObject:[beginTaskHandler copy]];
     beginTaskHandler();
-    
+
     // Start background timer to check if still in background
     [self startBackgroundTimer];
 }
 
 - (void)onApplicationDidBecomeActive:(NSNotification *)notification {
     NSLog(@"Application did become active, reset video");
-    
+
     // Stop background timer first
     [self stopBackgroundTimer];
-    
+
+    // Release the background task now rather than leaving it to expire later.
+    // A stale handle would otherwise fire its expiration handler long after the
+    // app returned to the foreground and call stopScrcpy on a live session.
+    // Done before the status check below so the task is released on every path.
+    [self endCurrentBackgroundTask];
+
     if (self.scrcpyStatus != ScrcpyStatusSDLWindowCreated) {
         return;
     }
@@ -640,15 +726,25 @@ void ScrcpyTryResetVideo(void) {
 }
 
 - (void)handleBackgroundTimeout {
-    // Check if still in background and alreay 5 minutes passed
+    // Check if still in background and the user's configured duration passed
     NSTimeInterval currentTime = [NSDate date].timeIntervalSince1970;
     NSLog(@"Background timer fired, passed %f seconds, checking status...", currentTime - self.lastBackgroundCheckTime);
-    
+
+    NSTimeInterval allowedDuration = [self configuredBackgroundActiveDuration];
+
+    // "Always" means never disconnect for being backgrounded.
+    if (allowedDuration == kBackgroundDurationAlways) {
+        NSLog(@"Background active duration is Always, keeping session alive");
+        [self stopBackgroundTimer];
+        return;
+    }
+
     if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground &&
-        currentTime - self.lastBackgroundCheckTime >= 60 * 5) {
-        NSLog(@"App is still in background, stopping scrcpy");
+        currentTime - self.lastBackgroundCheckTime >= allowedDuration) {
+        NSLog(@"App is still in background for %.0f seconds (limit %.0f), stopping scrcpy",
+              currentTime - self.lastBackgroundCheckTime, allowedDuration);
         [self stopScrcpy];
-        
+
         // Stop timer
         [self stopBackgroundTimer];
     } else {
