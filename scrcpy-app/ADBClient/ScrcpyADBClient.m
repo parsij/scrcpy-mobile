@@ -222,10 +222,36 @@ void ScrcpyTryResetVideo(void) {
         NSLog(@"ADB Devices: %@", connectedDevices);
         
         NSString *authTips = @"\n\nPlease check and accpet the adb authorization request on your device.";
-        
+
         if (returnCode != 0 || [connectResult containsString:@"failed"]) {
             NSLog(@"❌ ADB connect failed: %@", connectResult);
-            ScrcpyUpdateStatus(ScrcpyStatusConnectingFailed, [connectResult stringByAppendingString:authTips].UTF8String);
+
+            // A "failed to connect" here means adb could not even reach the
+            // target socket — this is a reachability problem, not a pending
+            // authorization prompt. Appending the auth tip in that case is
+            // actively misleading (the device may be perfectly authorized but
+            // simply unreachable), which is exactly what users hit when the
+            // Tailscale forward's upstream address is not reachable inside the
+            // tailnet (e.g. a LAN IP after leaving WiFi). Give network-aware
+            // guidance instead.
+            BOOL unreachable = [connectResult containsString:@"failed to connect"]
+                            || [connectResult containsString:@"Connection refused"]
+                            || [connectResult containsString:@"cannot connect"];
+            NSString *tips = authTips;
+            if (unreachable) {
+                BOOL usingTailscale = [arguments[@"isUsingTailscale"] boolValue];
+                if (usingTailscale) {
+                    NSString *remoteHost = arguments[@"tailscaleRemoteHost"] ?: @"the target address";
+                    NSString *remotePort = arguments[@"tailscaleRemotePort"] ?: @"";
+                    NSString *remote = remotePort.length ? [NSString stringWithFormat:@"%@:%@", remoteHost, remotePort] : remoteHost;
+                    tips = [NSString stringWithFormat:
+                            @"\n\nTailscale could not reach %@ inside the tailnet. Make sure the Android device is joined to the same Tailscale network (or reachable via a subnet router), and that you use its Tailscale IP / MagicDNS name rather than a LAN address such as 192.168.x.x.", remote];
+                } else {
+                    tips = @"\n\nCould not reach the device. Check that the IP/port is correct, the device is powered on and on the same network, and that wireless debugging (adb over TCP) is enabled.";
+                }
+            }
+
+            ScrcpyUpdateStatus(ScrcpyStatusConnectingFailed, [connectResult stringByAppendingString:tips].UTF8String);
             return;
         }
         

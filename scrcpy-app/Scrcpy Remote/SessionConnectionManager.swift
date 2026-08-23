@@ -615,6 +615,12 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
                     sessionDict["port"] = finalConnectionInfo.port
                     
                     if finalConnectionInfo.isUsingTailscale {
+                        // Carry the real remote target through so a failed local
+                        // forward can produce a Tailscale-aware error instead of
+                        // the misleading "accept the adb authorization" tip.
+                        sessionDict["isUsingTailscale"] = true
+                        sessionDict["tailscaleRemoteHost"] = finalConnectionInfo.originalHost
+                        sessionDict["tailscaleRemotePort"] = finalConnectionInfo.originalPort
                         print("🔗 [SessionConnectionManager] Using Tailscale connection: \(finalConnectionInfo.originalHost):\(finalConnectionInfo.originalPort) -> \(finalConnectionInfo.host):\(finalConnectionInfo.port)")
                     } else {
                         sessionDict["host"] = finalConnectionInfo.host
