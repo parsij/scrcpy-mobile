@@ -622,7 +622,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.5.0;
+				MARKETING_VERSION = 4.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.mobile.scrcpy-ios.ScrcpyLiveActivityWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -650,7 +650,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 4.5.0;
+				MARKETING_VERSION = 4.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.mobile.scrcpy-ios.ScrcpyLiveActivityWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -812,7 +812,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../porting/libs/$(PLATFORM_NAME)/$(ARCHS)";
-				MARKETING_VERSION = 4.5.0;
+				MARKETING_VERSION = 4.6.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
 					"-framework",
@@ -873,7 +873,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/../porting/libs/$(PLATFORM_NAME)/$(ARCHS)";
-				MARKETING_VERSION = 4.5.0;
+				MARKETING_VERSION = 4.6.0;
 				OTHER_LDFLAGS = (
 					"-ladb-full",
 					"-framework",
