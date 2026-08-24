@@ -96,34 +96,20 @@ echo "    dSYMs:   $DSYM_DEST"
 
 # ---------------------------------------------------------------------------
 # Upload the freshly-built IPA to the internal OTA distribution service.
+#
+# Delegated to scripts/upload-dev-ipa.sh so the upload can also be re-run on
+# its own without rebuilding. Invoked with `set +e` because the archive, IPA
+# and dSYMs above are the real output of this script: a failed upload (service
+# down, no network) should warn rather than discard a successful build.
 # ---------------------------------------------------------------------------
 echo ""
-echo "📤 Uploading IPA to dev-ipa.wsen.me..."
-UPLOAD_RESP=$(curl -sS -X POST https://dev-ipa.wsen.me/api/upload \
-  -F "file=@${IPA_PATH}")
-echo "Upload response: $UPLOAD_RESP"
+set +e
+bash "$SCRIPT_DIR/upload-dev-ipa.sh" "$IPA_PATH"
+UPLOAD_STATUS=$?
+set -e
 
-# Try to pull out id / url from the JSON response for convenience. Best
-# effort only — never let a parse failure abort the script.
-if command -v python3 >/dev/null 2>&1; then
-    python3 - "$UPLOAD_RESP" <<'PY' || true
-import json, sys
-raw = sys.argv[1] if len(sys.argv) > 1 else ""
-try:
-    data = json.loads(raw)
-except Exception:
-    sys.exit(0)
-if isinstance(data, dict):
-    for key in ("id", "url"):
-        if key in data and data[key]:
-            print(f"   {key}: {data[key]}")
-PY
-fi
-
-# Success is signalled by the presence of an "id" field in the JSON body.
-if printf '%s' "$UPLOAD_RESP" | grep -q '"id"'; then
-    echo "✅ Upload succeeded! Install at: https://dev-ipa.wsen.me"
-else
-    echo "❌ Upload may have failed, check response above"
-    exit 1
+if [ "$UPLOAD_STATUS" -ne 0 ]; then
+    echo ""
+    echo "⚠️  Upload failed (exit $UPLOAD_STATUS), but the build succeeded."
+    echo "    Retry with: bash scripts/upload-dev-ipa.sh \"$IPA_PATH\""
 fi
