@@ -28,6 +28,11 @@ BOOL IsRemoteOrientationKnown(void);
 // Used for recovering from render failures or decoder overload
 void ScrcpyTryResetVideo(void);
 
+// Diagnostics: seconds until ScrcpyTryResetVideo() would actually reset (0 if it
+// would go through now), with a short human-readable reason. Does not mutate the
+// rate-limiter state.
+NSTimeInterval ScrcpyResetVideoBlockedFor(const char **reason);
+
 // Application background-state flag shared with the C porting layer.
 //   - SetApplicationBackgroundState(YES/NO): called from app lifecycle.
 //   - GetUpdateApplicationBackgroundState(update): reads the flag; when

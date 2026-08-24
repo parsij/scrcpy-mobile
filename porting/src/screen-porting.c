@@ -78,14 +78,91 @@ sc_screen_init(struct sc_screen *screen,
         return ret;
     }
 
-    // Apply device pixel scale to the SDL3 renderer.
-    float scale = ScrcpyRenderScreenScale();
-    SDL_SetRenderScale(screen->renderer, scale, scale);
+    // NOTE: do NOT call SDL_SetRenderScale() here.
+    //
+    // Under SDL2 (scrcpy v3) the upstream renderer drew the destination rect in
+    // logical points with no density conversion of its own, so the porting layer
+    // had to scale the renderer by the device pixel ratio to fill the backing
+    // store. scrcpy v4 does that conversion itself:
+    //
+    //     float scale = SDL_GetWindowPixelDensity(screen->window);   // screen.c
+    //     SDL_FRect geometry = { screen->rect.x * scale, ... };
+    //
+    // screen->rect comes from sc_sdl_get_window_size() -> SDL_GetWindowSize(),
+    // i.e. logical points, and upstream never touches the renderer scale (it
+    // relies on the 1.0 default). Applying SDL_SetRenderScale(nativeScale) on
+    // top therefore multiplied the geometry a second time, blowing the picture
+    // up by density x nativeScale (4x on @2x devices, 9x on @3x) so only a
+    // corner of the device screen remained visible.
+    //
+    // It also desynchronised input from output: touch coordinates are mapped by
+    // sc_screen_convert_window_to_frame_coords() using the *unscaled*
+    // screen->rect, so taps no longer landed where the picture appeared and the
+    // view could not be dragged back into place.
+    //
+    // Leaving the renderer at its default 1.0 scale keeps rendering and input on
+    // the same coordinate system, and lets upstream handle Retina scaling. This
+    // needs no resize/rotate handling either: upstream re-reads the pixel
+    // density on every sc_screen_render().
 
     // Save current screen pointer
     sc_screen_current_screen(screen);
 
+    // [ScreenGeometry] One-shot snapshot of the coordinate systems in play, so a
+    // device screenshot can be checked against real numbers rather than "looks
+    // right". window is logical points; density is what upstream multiplies by
+    // in sc_screen_render(); pixels is the backing store the picture must fill;
+    // content is the device frame size being mirrored.
+    struct sc_size win = sc_sdl_get_window_size(screen->window);
+    float density = SDL_GetWindowPixelDensity(screen->window);
+    LOGI("[ScreenGeometry] init: window=%ux%u pt, density=%.2f, "
+         "pixels=%.0fx%.0f px, content=%ux%u",
+         win.width, win.height, density,
+         win.width * density, win.height * density,
+         screen->content_size.width, screen->content_size.height);
+
     return ret;
+}
+
+// [ScreenGeometry] Report the computed content rect whenever it changes.
+//
+// Upstream recomputes screen->rect inside sc_screen_render(), which runs once
+// per frame; both it and sc_screen_update_content_rect() are static to
+// screen.c, so they cannot be wrapped from here without also rewriting their
+// internal call sites. Sampling from the event hook instead gives the same
+// numbers at the only moments they can change (resize, rotation, content-size
+// change), and the change check keeps it silent the rest of the time — no
+// per-frame logging in the render path.
+static void
+sc_screen_log_geometry_if_changed(struct sc_screen *screen) {
+    static SDL_FRect last_rect = {0, 0, 0, 0};
+    static struct sc_size last_window = {0, 0};
+
+    if (!screen->window) {
+        return;
+    }
+
+    struct sc_size win = sc_sdl_get_window_size(screen->window);
+    SDL_FRect r = screen->rect;
+
+    if (r.x == last_rect.x && r.y == last_rect.y &&
+        r.w == last_rect.w && r.h == last_rect.h &&
+        win.width == last_window.width && win.height == last_window.height) {
+        return; // unchanged since the last report — stay quiet
+    }
+    last_rect = r;
+    last_window = win;
+
+    // A rect that starts off-screen or extends past the window means part of
+    // the device screen is unreachable — the signature of the double-scaling
+    // bug removed above. Flagged explicitly so it is obvious in a log dump.
+    bool overflow = r.x < -0.5f || r.y < -0.5f ||
+                    r.x + r.w > (float) win.width + 0.5f ||
+                    r.y + r.h > (float) win.height + 0.5f;
+
+    LOGI("[ScreenGeometry] content rect=(%.0f,%.0f %.0fx%.0f) in window=%ux%u pt%s",
+         r.x, r.y, r.w, r.h, win.width, win.height,
+         overflow ? "  <-- OVERFLOW" : "");
 }
 
 void
@@ -120,6 +197,11 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
     }
 
     sc_screen_handle_event_hijack(screen, event);
+
+    // Sample geometry after upstream has processed the event (a resize or
+    // rotation updates screen->rect in there). Cheap: two float compares in the
+    // common case, and it only logs on an actual change.
+    sc_screen_log_geometry_if_changed(screen);
 }
 
 void SDL_DestroyWindow(SDL_Window *window);

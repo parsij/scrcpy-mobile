@@ -54,31 +54,77 @@ void ScrcpySendKeycodeEvent(SDL_Scancode scancode, SDL_Keycode keycode, SDL_Keym
     }
 }
 
-void ScrcpyTryResetVideo(void) {
-    static NSTimeInterval lastResetTime = 0;
-    static int resetCountInWindow = 0;
-    static NSTimeInterval windowStartTime = 0;
+// Rate-limiter state, file-scope so ScrcpyResetVideoBlockedFor() can report how
+// long a caller must wait. Only ever touched from the decode thread via
+// ScrcpyTryResetVideo() / the reporter below.
+static NSTimeInterval g_lastResetTime = 0;
+static int g_resetCountInWindow = 0;
+static NSTimeInterval g_resetWindowStartTime = 0;
 
+static const NSTimeInterval kResetCooldownSeconds = 3.0;
+static const NSTimeInterval kResetWindowSeconds = 10.0;
+static const int kMaxResetsPerWindow = 3;
+
+// How many seconds until ScrcpyTryResetVideo() would actually perform a reset,
+// and why it is currently blocked. Returns 0 when a reset would go through now.
+// Diagnostics only — it does not mutate the limiter state.
+NSTimeInterval ScrcpyResetVideoBlockedFor(const char **reason) {
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
 
-    // Basic cooldown: at least 1 second between resets
-    if (now - lastResetTime < 1.0) {
+    NSTimeInterval cooldownLeft = kResetCooldownSeconds - (now - g_lastResetTime);
+
+    // The window is only rolled forward inside ScrcpyTryResetVideo(); mirror
+    // that here so the number matches what the next call would decide.
+    BOOL windowExpired = (now - g_resetWindowStartTime) > kResetWindowSeconds;
+    NSTimeInterval windowLeft = windowExpired
+        ? 0
+        : kResetWindowSeconds - (now - g_resetWindowStartTime);
+    BOOL windowExhausted = !windowExpired && g_resetCountInWindow >= kMaxResetsPerWindow;
+
+    // Report whichever gate is further out, since both must clear.
+    if (windowExhausted && windowLeft > cooldownLeft) {
+        if (reason) { *reason = "reset quota exhausted"; }
+        return windowLeft;
+    }
+    if (cooldownLeft > 0) {
+        if (reason) { *reason = "cooldown"; }
+        return cooldownLeft;
+    }
+    if (reason) { *reason = "ready"; }
+    return 0;
+}
+
+void ScrcpyTryResetVideo(void) {
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+
+    // Basic cooldown between resets.
+    //
+    // A reset restarts the server-side encoder, so the picture is black until a
+    // fresh IDR arrives — typically a few hundred ms, but longer on a loaded
+    // link. Resetting again before the previous restart has produced its first
+    // keyframe just extends that black period without helping, so allow more
+    // room than the old 1s: long enough for a restart to actually land, short
+    // enough that a genuinely stuck stream still recovers promptly.
+    if (now - g_lastResetTime < kResetCooldownSeconds) {
         return;
     }
 
     // Rate limiting: max 3 resets per 10 seconds to avoid excessive resets
     // This prevents runaway reset loops in persistently problematic scenarios
-    if (now - windowStartTime > 10.0) {
+    if (now - g_resetWindowStartTime > kResetWindowSeconds) {
         // Start a new 10-second window
-        windowStartTime = now;
-        resetCountInWindow = 0;
+        g_resetWindowStartTime = now;
+        g_resetCountInWindow = 0;
     }
 
-    if (resetCountInWindow >= 3) {
+    if (g_resetCountInWindow >= kMaxResetsPerWindow) {
         // Already hit the limit for this window, skip
         static NSTimeInterval lastSkipLogTime = 0;
         if (now - lastSkipLogTime > 5.0) {
-            NSLog(@"⏳ [Render] Reset rate limited, waiting for cooldown");
+            NSLog(@"⏳ [StallRecovery] Reset rate limited: %d/%d used in window, "
+                  @"~%.1fs until the window resets (picture stays black until then)",
+                  g_resetCountInWindow, kMaxResetsPerWindow,
+                  kResetWindowSeconds - (now - g_resetWindowStartTime));
             lastSkipLogTime = now;
         }
         return;
@@ -86,10 +132,11 @@ void ScrcpyTryResetVideo(void) {
 
     // Perform the reset
     ScrcpySendKeycodeEvent(SDL_SCANCODE_R, SDLK_R, SDL_KMOD_LCTRL | SDL_KMOD_SHIFT);
-    resetCountInWindow++;
-    lastResetTime = now;
+    g_resetCountInWindow++;
+    g_lastResetTime = now;
 
-    NSLog(@"🔄 [Render] Video reset requested (count in window: %d/3)", resetCountInWindow);
+    NSLog(@"🔄 [StallRecovery] Video reset sent (%d/%d in this %.0fs window)",
+          g_resetCountInWindow, kMaxResetsPerWindow, kResetWindowSeconds);
 }
 
 @interface ScrcpyADBClient () <ScrcpyClientProtocol>
