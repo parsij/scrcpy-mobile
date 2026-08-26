@@ -162,9 +162,24 @@ static char orientationLockEnabledKey;
         return;
     }
 
-    CGFloat scale = UIScreen.mainScreen.nativeScale;
-    int newWidth = (int)(currentViewSize.width * scale);
-    int newHeight = (int)(currentViewSize.height * scale);
+    // Window coordinates (points), NOT pixels.
+    //
+    // This comparison must be made in the same unit SDL_GetWindowSize() below
+    // reports, and SDL3 documents that as "the client area's size in window
+    // coordinates" — points on a Retina display; SDL_GetWindowSizeInPixels()
+    // is the pixel variant. SDL2 returned pixels here on iOS, which is why the
+    // original SDL2-era code multiplied by nativeScale; carrying that multiply
+    // across the SDL3 migration compared points against pixels, so the sizes
+    // never matched, the mismatch branch fired on every single layout pass,
+    // and each pass pushed a resize event carrying a pixel-sized geometry.
+    //
+    // Points are also the right unit to *push*: upstream's whole geometry and
+    // input chain works in them (sc_sdl_get_window_size() -> SDL_GetWindowSize(),
+    // and SDL mouse/touch events are documented "relative to window"). Fixing
+    // this by comparing in pixels instead would stop the loop but hand upstream
+    // a pixel-sized window, moving the error rather than removing it.
+    int newWidth = (int)currentViewSize.width;
+    int newHeight = (int)currentViewSize.height;
 
     // Get SDL window to compare sizes
     SDL_Window *sdlWindow = SDL_GetKeyboardFocus();
@@ -178,7 +193,7 @@ static char orientationLockEnabledKey;
     }
 
     // Skip only when nothing has changed: view size matches cache AND SDL's
-    // own cached size already matches the actual pixel size. We must re-check
+    // own cached size already matches the actual view size. We must re-check
     // SDL even if view bounds equal the cached value, because Slide Over
     // hide/restore can leave SDL's coordinate-mapping rect stale without ever
     // changing self.view.bounds.
@@ -204,8 +219,12 @@ static char orientationLockEnabledKey;
             event.window.windowID = SDL_GetWindowID(sdlWindow);
             SDL_PushEvent(&event);
 
-            // Also push the size-changed-in-points sibling so any listener
-            // that watches RESIZED still sees an update.
+            // Also push RESIZED. Upstream treats the two differently:
+            // PIXEL_SIZE_CHANGED ignores data1/data2 and just re-renders
+            // (sc_screen_render re-queries the sizes itself), while RESIZED
+            // reads the payload — under --flex-display it forwards it to
+            // sc_screen_request_resize_display(). That consumer wants window
+            // coordinates, which is what we now send.
             event.type = SDL_EVENT_WINDOW_RESIZED;
             SDL_PushEvent(&event);
 
