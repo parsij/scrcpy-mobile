@@ -23,6 +23,27 @@ class AppLogManager: ObservableObject {
     private var originalStderr: Int32 = 0
     private var isLoggingActive: Bool = false
     private let maxTotalLogSize: Int64 = 100 * 1024 * 1024 // 100MB
+
+    // MARK: - Runtime size cap for the *current* log file
+    //
+    // startLogging() redirects the whole process's stdout/stderr into the log
+    // file with freopen(), so every printf()/fprintf() from the C layer lands
+    // here. Nothing bounded that file at runtime: the only cleanup,
+    // performAutoCleanupOnColdStart(), runs once in init() and explicitly skips
+    // the current file (it deletes *older* logs to get the total under
+    // maxTotalLogSize). A component logging in a loop could therefore grow a
+    // single file without limit — a user reported one at 76 GB.
+    //
+    // So check the live size periodically and truncate when it crosses the cap.
+    private let maxCurrentLogSize: Int64 = 50 * 1024 * 1024 // 50MB
+
+    // Checking the size on every write would mean a stat() per line, so the
+    // check runs on a timer instead: one stat() every few seconds, off the
+    // thread doing the logging. At worst the file overshoots the cap by however
+    // much can be written in one interval, which is bounded and far from 76 GB.
+    private let sizeCheckInterval: TimeInterval = 5.0
+    private var sizeCheckTimer: DispatchSourceTimer?
+    private let sizeCheckQueue = DispatchQueue(label: "com.mobile.scrcpy-ios.logsize")
     
     private init() {
         // 创建日志目录路径
@@ -90,15 +111,92 @@ class AppLogManager: ObservableObject {
             print("=== Scrcpy Remote Log Started: \(Date()) ===")
             fflush(stdout); fflush(stderr)
 
+            // Bound the file from here on, and check once immediately so a file
+            // that is already oversized (e.g. grown during a previous run) is
+            // cut back at startup rather than after the first interval.
+            startSizeMonitor()
+            sizeCheckQueue.async { [weak self] in
+                self?.enforceCurrentLogSizeLimit()
+            }
+
             updateLogStatistics()
         }
     }
     
+    // MARK: - Runtime size enforcement
+
+    /// Start the periodic size check that keeps the current log bounded.
+    private func startSizeMonitor() {
+        stopSizeMonitor()
+
+        let timer = DispatchSource.makeTimerSource(queue: sizeCheckQueue)
+        timer.schedule(deadline: .now() + sizeCheckInterval,
+                       repeating: sizeCheckInterval)
+        timer.setEventHandler { [weak self] in
+            self?.enforceCurrentLogSizeLimit()
+        }
+        timer.resume()
+        sizeCheckTimer = timer
+    }
+
+    private func stopSizeMonitor() {
+        sizeCheckTimer?.cancel()
+        sizeCheckTimer = nil
+    }
+
+    /// Truncate the current log file if it has grown past maxCurrentLogSize.
+    ///
+    /// Truncation rather than rotation is deliberate. freopen() bound stdout and
+    /// stderr to this path; renaming the file to a .1 backup would leave those
+    /// streams writing into the now-unlinked inode, so the disk space would
+    /// never be reclaimed and the visible log would stop growing — exactly the
+    /// failure we are trying to fix, but harder to notice. Truncating through
+    /// the same descriptor keeps the streams valid and frees the space
+    /// immediately.
+    private func enforceCurrentLogSizeLimit() {
+        guard isLoggingActive, let path = currentLogFilePath else {
+            return
+        }
+
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attributes[.size] as? Int64 else {
+            return
+        }
+
+        guard size > maxCurrentLogSize else {
+            return
+        }
+
+        // Flush first: bytes still sitting in stdio buffers would otherwise be
+        // written after the truncate and re-grow the file from a stale offset.
+        fflush(stdout)
+        fflush(stderr)
+
+        // ftruncate + rewind on both streams. Both are the same file, so the
+        // truncate only needs to happen once; the seeks must happen on each,
+        // otherwise the next write lands at the old (huge) offset and recreates
+        // a sparse file of the original size.
+        let truncated = ftruncate(fileno(stderr), 0) == 0
+        rewind(stderr)
+        rewind(stdout)
+
+        if truncated {
+            print("♻️ [AppLogManager] Log file exceeded \(ByteCountFormatter.string(fromByteCount: maxCurrentLogSize, countStyle: .file)) (was \(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))), truncated in place")
+            fflush(stdout)
+        }
+
+        updateLogStatistics()
+    }
+
     /// 停止日志记录
     func stopLogging() {
         guard isLoggingActive else {
             return
         }
+
+        // Stop the size monitor before restoring the descriptors, so it cannot
+        // fire against stdout/stderr that no longer point at the log file.
+        stopSizeMonitor()
 
         // 记录结束日志的时间戳
         print("=== Scrcpy Remote Log Stopped: \(Date()) ===")
