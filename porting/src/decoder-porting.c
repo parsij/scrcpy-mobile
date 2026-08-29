@@ -8,6 +8,8 @@
 #define avcodec_send_packet(...)        avcodec_send_packet_hijack(__VA_ARGS__)
 #define avcodec_receive_frame(...)        avcodec_receive_frame_hijack(__VA_ARGS__)
 
+#include <time.h>
+
 #include "decoder.c"
 
 #undef avcodec_receive_frame
@@ -81,14 +83,60 @@ static bool convert_yuv420v_from_frame_data3(const Uint8 *frame_data3, int width
     return true;
 }
 
+// Throttle for the decode-error logs below.
+//
+// AppLogManager redirects the process's stderr into a file on disk when logging
+// is enabled, so an unthrottled fprintf here writes a line per packet for as
+// long as the error persists. Both hijacks deliberately keep the stream alive
+// across a failure (see the comments on each), which means a persistent error
+// is logged forever rather than ending the session — a user reported a single
+// log file at 76 GB.
+//
+// Log at most one line per interval per call site, and report how many
+// occurrences were suppressed so the rate is still visible.
+#define SC_DECODE_LOG_INTERVAL_SEC 5.0
+
+static bool sc_should_log_decode_error(double *last_log_time, int *suppressed) {
+    // Monotonic elapsed seconds. clock() would measure CPU time, not wall time,
+    // which on a mostly-blocked decode thread runs far slower than real time and
+    // would stretch the interval unpredictably. CLOCK_MONOTONIC is unaffected by
+    // both CPU usage and the user changing the date.
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+    (*suppressed)++;
+    if (now - *last_log_time < SC_DECODE_LOG_INTERVAL_SEC) {
+        return false;
+    }
+    *last_log_time = now;
+    return true;
+}
+
 int avcodec_send_packet_hijack(AVCodecContext *avctx, const AVPacket *avpkt) {
     int ret = avcodec_send_packet(avctx, avpkt);
     if (ret < 0) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        fprintf(stderr, "[ERROR] avcodec_send_packet error: %s\n", errbuf);
+        static double last_log_time = 0;
+        static int suppressed = 0;
+        if (sc_should_log_decode_error(&last_log_time, &suppressed)) {
+            char errbuf[AV_ERROR_MAX_STRING_SIZE];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            fprintf(stderr, "[ERROR] avcodec_send_packet error: %s (x%d in the last %.0fs)\n",
+                    errbuf, suppressed, SC_DECODE_LOG_INTERVAL_SEC);
+            suppressed = 0;
+        }
 		ScrcpyTryResetVideo();
     }
+    // Deliberately report success to the caller even on failure.
+    //
+    // Upstream sc_decoder_push() returns false when send_packet fails, which
+    // breaks the demuxer's read loop and ends the whole session
+    // (on_ended -> disconnect). On iOS a decode error is usually transient —
+    // VideoToolbox dropping its session across a background transition, or a
+    // corrupt packet after a network hiccup — and dropping the connection for
+    // one bad packet is far worse than skipping it. Swallowing the error keeps
+    // the stream alive and lets ScrcpyTryResetVideo() above ask the server for
+    // a fresh keyframe. This is the hijack's original purpose (4ca3338); the
+    // same reasoning is documented on avcodec_receive_frame_hijack below.
     return ret < 0 ? 0 : ret;
 }
 
@@ -111,10 +159,22 @@ int avcodec_receive_frame_hijack(AVCodecContext *avctx, AVFrame *frame) {
     // foreground via ScrcpyTryResetVideo().
     if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
         bool inBg = GetUpdateApplicationBackgroundState(false);
-        fprintf(stderr, "[decoder-porting] receive_frame error ret=%d bg=%d\n",
-                ret, (int)inBg);
+
+        // Same throttling rationale as send_packet above: while backgrounded
+        // this branch is hit for every packet and returns EAGAIN, so the error
+        // persists by design and an unthrottled log would write a line per
+        // packet for the whole time the app is in the background.
+        static double last_log_time = 0;
+        static int suppressed = 0;
+        if (sc_should_log_decode_error(&last_log_time, &suppressed)) {
+            fprintf(stderr,
+                    "[decoder-porting] receive_frame error ret=%d bg=%d%s (x%d in the last %.0fs)\n",
+                    ret, (int)inBg, inBg ? " -> suppressing to EAGAIN" : "",
+                    suppressed, SC_DECODE_LOG_INTERVAL_SEC);
+            suppressed = 0;
+        }
+
         if (inBg) {
-            fprintf(stderr, "[decoder-porting] suppressing VT error → EAGAIN\n");
             return AVERROR(EAGAIN);
         }
     }
