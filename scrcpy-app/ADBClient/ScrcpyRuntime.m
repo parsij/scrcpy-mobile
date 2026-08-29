@@ -61,6 +61,13 @@ NSString * const ScrcpyRemoteOrientationChangedNotification = @"ScrcpyRemoteOrie
 static int g_consecutiveDropCount = 0;
 static int g_totalDropCount = 0;
 static CFAbsoluteTime g_lastRecoveryTime = 0;
+// Throttle for the display-layer-failed log below. The failure status is sticky
+// until the layer is flushed and a frame is accepted again, so without this the
+// message prints once per decoded frame — tens of lines a second, straight into
+// the redirected log file.
+static CFAbsoluteTime g_lastLayerFailLogTime = 0;
+static int g_layerFailCountSinceLog = 0;
+static const CFAbsoluteTime kLayerFailLogIntervalSeconds = 5.0;
 static CFAbsoluteTime g_stallStartTime = 0;  // when the queue first went full (0 = not stalled)
 // Start of the current black-picture episode, kept across the flush+reset that
 // g_stallStartTime is rebased by, so the recovery log can report the total time
@@ -249,7 +256,24 @@ void RenderPixelBufferFrame(CVPixelBufferRef pixelBuffer) {
         AVQueuedSampleBufferRenderingStatus status = displayLayer.status;
         if (status == AVQueuedSampleBufferRenderingStatusFailed) {
             NSError *error = displayLayer.error;
-            NSLog(@"⚠️ [Render] Display layer failed: %@", error.localizedDescription);
+
+            // Log at most once per kLayerFailLogIntervalSeconds, carrying the
+            // number of occurrences suppressed since the last line so a
+            // persistent failure is still obvious from its rate.
+            CFAbsoluteTime nowFail = CFAbsoluteTimeGetCurrent();
+            g_layerFailCountSinceLog++;
+            if (nowFail - g_lastLayerFailLogTime >= kLayerFailLogIntervalSeconds) {
+                if (g_layerFailCountSinceLog > 1) {
+                    NSLog(@"⚠️ [Render] Display layer failed: %@ (x%d in the last %.0fs)",
+                          error.localizedDescription, g_layerFailCountSinceLog,
+                          kLayerFailLogIntervalSeconds);
+                } else {
+                    NSLog(@"⚠️ [Render] Display layer failed: %@",
+                          error.localizedDescription);
+                }
+                g_lastLayerFailLogTime = nowFail;
+                g_layerFailCountSinceLog = 0;
+            }
 
             [displayLayer flush];
 
