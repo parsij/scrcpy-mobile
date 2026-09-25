@@ -27,6 +27,7 @@ final class IPhoneOrientationSync {
     private var originalRotation: OriginalRotation?
     private var ready = false
     private var stopping = false
+    private var restoring = false
     private var sending = false
     private var attemptedChange = false
     private var desiredRotation: Int?
@@ -42,8 +43,7 @@ final class IPhoneOrientationSync {
         assert(Thread.isMainThread)
 
         if self.sessionID == sessionID, self.serial == serial, !stopping {
-            synchronizeNow(force: true)
-            return
+            return  // Duplicate window-created/appeared notifications.
         }
 
         guard self.sessionID == nil else {
@@ -56,6 +56,7 @@ final class IPhoneOrientationSync {
         generation = UUID()
         ready = false
         stopping = false
+        restoring = false
         sending = false
         attemptedChange = false
         appliedRotation = nil
@@ -192,13 +193,28 @@ final class IPhoneOrientationSync {
     }
 
     private func finishStop() {
-        guard stopping, !sending else { return }
+        guard stopping, !sending, !restoring else { return }
+        restoring = true
+        guard attemptedChange, let restoreSerial = serial,
+              let restoreState = originalRotation else {
+            completeStop()
+            return
+        }
+
+        let arguments = restoreState.automatic
+            ? ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "free"]
+            : ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "lock", String(restoreState.rotation)]
+        execute(arguments) { [weak self] output, code in
+            if code != 0 {
+                print("[iPhoneOrientationSync] Could not restore Android rotation: \(output ?? "unknown error")")
+            }
+            self?.completeStop()
+        }
+    }
+
+    private func completeStop() {
         let callbacks = stopCompletions
         stopCompletions = []
-        let restoreSerial = serial
-        let restoreState = originalRotation
-        let shouldRestore = attemptedChange && restoreState != nil
-
         sessionID = nil
         serial = nil
         originalRotation = nil
@@ -206,24 +222,10 @@ final class IPhoneOrientationSync {
         appliedRotation = nil
         ready = false
         stopping = false
+        restoring = false
         attemptedChange = false
         generation = UUID()
-
-        guard shouldRestore, let restoreSerial = restoreSerial,
-              let restoreState = restoreState else {
-            callbacks.forEach { $0() }
-            return
-        }
-
-        let arguments = restoreState.automatic
-            ? ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "free"]
-            : ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "lock", String(restoreState.rotation)]
-        execute(arguments) { output, code in
-            if code != 0 {
-                print("[iPhoneOrientationSync] Could not restore Android rotation: \(output ?? "unknown error")")
-            }
-            callbacks.forEach { $0() }
-        }
+        callbacks.forEach { $0() }
     }
 
     private func execute(_ arguments: [String], completion: @escaping (String?, Int32) -> Void) {
