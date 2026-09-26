@@ -441,14 +441,10 @@ class AppSchemeManagerV2: ObservableObject {
             // 如果 value == "true"，设置 value 为 "" 以匹配命令行样式的 scrcpy 选项，如 --turn-screen-off
             let processedValue = (value == "true") ? "" : value
             
-            // This is a client-side feature, not a scrcpy server CLI flag.
-            if name == "sync-iphone-orientation" {
-                session.adbOptions.syncIPhoneOrientation = value == "true"
-                continue
+            // Client-side orientation sync must not become a scrcpy CLI flag.
+            if name != "sync-iphone-orientation" {
+                scrcpyOptions = setScrcpyOption(scrcpyOptions, name: name, value: processedValue)
             }
-
-            // 设置 scrcpy 选项
-            scrcpyOptions = setScrcpyOption(scrcpyOptions, name: name, value: processedValue)
             
             // 处理特殊参数
             switch name {
