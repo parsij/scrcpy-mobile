@@ -15,9 +15,21 @@ import UIKit
 final class IPhoneOrientationSync {
     static let shared = IPhoneOrientationSync()
 
-    private struct OriginalRotation {
-        let automatic: Bool
-        let rotation: Int
+    /// Snapshot the user's previous rotation policy using Android's own
+    /// window-manager command, which reports either "free" or "lock N".
+    enum OriginalRotation: Equatable {
+        case automatic
+        case locked(Int)
+
+        static func parse(_ output: String) -> Self? {
+            let parts = output.split(whereSeparator: \.isWhitespace)
+            if parts.count == 1, parts[0] == "free" { return .automatic }
+            if parts.count == 2, parts[0] == "lock",
+               let angle = Int(parts[1]), (0...3).contains(angle) {
+                return .locked(angle)
+            }
+            return nil
+        }
     }
 
     private var sessionID: UUID?
@@ -33,6 +45,8 @@ final class IPhoneOrientationSync {
     private var desiredRotation: Int?
     private var appliedRotation: Int?
     private var pendingChange: DispatchWorkItem?
+    private var snapshotTimeout: DispatchWorkItem?
+    private var stopTimeout: DispatchWorkItem?
     private var stopCompletions: [() -> Void] = []
 
     private init() {}
@@ -72,30 +86,27 @@ final class IPhoneOrientationSync {
             self?.deviceOrientationChanged()
         }
 
-        // Snapshot BEFORE modifying Android. Don't override the remote device
-        // if its original rotation mode cannot be read and later restored.
+        // Snapshot BEFORE modifying Android. This is one round trip even over
+        // Tailscale, and reads the same policy that our rotation commands edit.
         let token = generation
-        execute(["-s", serial, "shell", "settings", "get", "system", "accelerometer_rotation"]) { [weak self] automaticOutput, automaticCode in
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, self.generation == token, !self.ready, !self.stopping else { return }
+            self.failToStart("Timed out reading the original Android rotation")
+        }
+        snapshotTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+
+        execute(["-s", serial, "shell", "cmd", "window", "user-rotation"]) { [weak self] output, code in
             guard let self = self, self.generation == token, !self.stopping else { return }
-            let automaticText = automaticOutput?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard automaticCode == 0, let automaticText = automaticText,
-                  automaticText == "0" || automaticText == "1" else {
-                self.failToStart("Cannot read Android auto-rotation setting")
+            self.snapshotTimeout?.cancel()
+            self.snapshotTimeout = nil
+            guard code == 0, let original = OriginalRotation.parse(output ?? "") else {
+                self.failToStart("Cannot read Android's original rotation policy")
                 return
             }
-
-            self.execute(["-s", serial, "shell", "settings", "get", "system", "user_rotation"]) { [weak self] rotationOutput, rotationCode in
-                guard let self = self, self.generation == token, !self.stopping else { return }
-                let rotationText = rotationOutput?.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard rotationCode == 0, let rotationText = rotationText,
-                      let rotation = Int(rotationText), (0...3).contains(rotation) else {
-                    self.failToStart("Cannot read Android's original rotation")
-                    return
-                }
-                self.originalRotation = OriginalRotation(automatic: automaticText == "1", rotation: rotation)
-                self.ready = true
-                self.synchronizeNow(force: true)
-            }
+            self.originalRotation = original
+            self.ready = true
+            self.synchronizeNow(force: true)
         }
     }
 
@@ -119,6 +130,16 @@ final class IPhoneOrientationSync {
         guard !stopping else { return }
 
         stopping = true
+        snapshotTimeout?.cancel()
+        snapshotTimeout = nil
+        let token = generation
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, self.generation == token, self.stopping else { return }
+            print("[iPhoneOrientationSync] Timed out restoring rotation; disconnecting without blocking.")
+            self.completeStop()
+        }
+        stopTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
         pendingChange?.cancel()
         pendingChange = nil
         if let observer = observer {
@@ -144,9 +165,11 @@ final class IPhoneOrientationSync {
         // Ignore face-up, face-down and unknown readings, and coalesce a burst
         // of sensor notifications into one ADB command.
         pendingChange?.cancel()
+        let token = generation
         let work = DispatchWorkItem { [weak self] in
-            self?.desiredRotation = rotation
-            self?.sendIfNeeded()
+            guard let self = self, self.generation == token, self.ready, !self.stopping else { return }
+            self.desiredRotation = rotation
+            self.sendIfNeeded()
         }
         pendingChange = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
@@ -201,9 +224,13 @@ final class IPhoneOrientationSync {
             return
         }
 
-        let arguments = restoreState.automatic
-            ? ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "free"]
-            : ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "lock", String(restoreState.rotation)]
+        let arguments: [String]
+        switch restoreState {
+        case .automatic:
+            arguments = ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "free"]
+        case .locked(let rotation):
+            arguments = ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "lock", String(rotation)]
+        }
         execute(arguments) { [weak self] output, code in
             if code != 0 {
                 print("[iPhoneOrientationSync] Could not restore Android rotation: \(output ?? "unknown error")")
@@ -213,6 +240,10 @@ final class IPhoneOrientationSync {
     }
 
     private func completeStop() {
+        snapshotTimeout?.cancel()
+        snapshotTimeout = nil
+        stopTimeout?.cancel()
+        stopTimeout = nil
         let callbacks = stopCompletions
         stopCompletions = []
         sessionID = nil
