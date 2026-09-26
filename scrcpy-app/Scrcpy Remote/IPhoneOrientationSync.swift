@@ -54,7 +54,10 @@ final class IPhoneOrientationSync {
     /// Starts after the ADB video window is connected. Repeated calls for the
     /// same session (e.g. window-created and window-appeared events) are safe.
     func start(sessionID: UUID, serial: String) {
-        assert(Thread.isMainThread)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.start(sessionID: sessionID, serial: serial) }
+            return
+        }
 
         if self.sessionID == sessionID, self.serial == serial, !stopping {
             return  // Duplicate window-created/appeared notifications.
@@ -113,7 +116,10 @@ final class IPhoneOrientationSync {
     /// Called on foreground/reopen; re-applies the current iPhone orientation
     /// in case the remote device changed while the app was suspended.
     func resume() {
-        assert(Thread.isMainThread)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.resume() }
+            return
+        }
         synchronizeNow(force: true)
     }
 
@@ -121,7 +127,13 @@ final class IPhoneOrientationSync {
     /// The completion runs only after the restoration attempt, so callers can
     /// close the ADB connection without racing the final command.
     func stop(completion: @escaping () -> Void = {}) {
-        assert(Thread.isMainThread)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { completion(); return }
+                self.stop(completion: completion)
+            }
+            return
+        }
         guard sessionID != nil else {
             completion()
             return
