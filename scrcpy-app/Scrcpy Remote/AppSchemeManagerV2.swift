@@ -43,6 +43,7 @@ import UIKit
  - display-height/height: 显示高度
  - display-dpi/dpi: 显示 DPI
  - display-id: 显示器 ID (用于多显示器支持)
+ - sync-iphone-orientation: 用 iPhone 的方向同步 Android 主屏幕 (true/false)
  
  VNC 参数：
  - vnc-user/user: VNC 用户名
@@ -355,6 +356,8 @@ class AppSchemeManagerV2: ObservableObject {
                 session.adbOptions.stayAwake = value == "true"
             case "power-off-on-close":
                 session.adbOptions.powerOffOnClose = value == "true"
+            case "sync-iphone-orientation":
+                session.adbOptions.syncIPhoneOrientation = value == "true"
             case "force-adb-forward":
                 session.adbOptions.forceAdbForward = value == "true"
             case "volume-scale":
@@ -438,8 +441,10 @@ class AppSchemeManagerV2: ObservableObject {
             // 如果 value == "true"，设置 value 为 "" 以匹配命令行样式的 scrcpy 选项，如 --turn-screen-off
             let processedValue = (value == "true") ? "" : value
             
-            // 设置 scrcpy 选项
-            scrcpyOptions = setScrcpyOption(scrcpyOptions, name: name, value: processedValue)
+            // Client-side orientation sync must not become a scrcpy CLI flag.
+            if name != "sync-iphone-orientation" {
+                scrcpyOptions = setScrcpyOption(scrcpyOptions, name: name, value: processedValue)
+            }
             
             // 处理特殊参数
             switch name {
@@ -471,6 +476,8 @@ class AppSchemeManagerV2: ObservableObject {
                 session.adbOptions.stayAwake = value == "true"
             case "power-off-on-close":
                 session.adbOptions.powerOffOnClose = value == "true"
+            case "sync-iphone-orientation":
+                session.adbOptions.syncIPhoneOrientation = value == "true"
             case "force-adb-forward":
                 session.adbOptions.forceAdbForward = value == "true"
             case "volume-scale":
