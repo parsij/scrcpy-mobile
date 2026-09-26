@@ -231,11 +231,13 @@ final class IPhoneOrientationSync {
         case .locked(let rotation):
             arguments = ["-s", restoreSerial, "shell", "cmd", "window", "user-rotation", "lock", String(rotation)]
         }
+        let token = generation
         execute(arguments) { [weak self] output, code in
+            guard let self = self, self.generation == token, self.stopping else { return }
             if code != 0 {
                 print("[iPhoneOrientationSync] Could not restore Android rotation: \(output ?? "unknown error")")
             }
-            self?.completeStop()
+            self.completeStop()
         }
     }
 
