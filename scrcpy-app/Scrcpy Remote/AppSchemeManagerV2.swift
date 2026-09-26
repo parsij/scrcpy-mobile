@@ -601,37 +601,19 @@ class AppSchemeManagerV2: ObservableObject {
         return newOptions
     }
     
-    /// 启动连接
+    /// Forward each URL launch to the same connection lifecycle used by the
+    /// Sessions screen. A repeated URL is an explicit request to reconnect,
+    /// even when it targets the current device. Do not pre-disconnect or set
+    /// currentSession here: connectToSession() owns both operations and waits
+    /// for rotation restoration before starting the next connection.
     private func startConnection(with session: ScrcpySessionModel) {
         print("🚀 [AppSchemeManagerV2] Starting connection with session: \(session.sessionName)")
-        
-        // 解析连接信息
-        Task {
-            let connectionInfo = await SessionNetworking.shared.getConnectionInfo(for: session)
-            
-            await MainActor.run {
-                // 使用 SessionConnectionManager 检查是否需要重连
-                if !connectionManager.shouldReconnect(to: session, with: connectionInfo) {
-                    print("🔄 [AppSchemeManagerV2] No reconnection needed, ignoring URL scheme")
-                    return
-                }
-                
-                // 断开当前连接（如果有）
-                connectionManager.disconnectCurrent()
-                
-                // 设置新的当前会话
-                connectionManager.setCurrentSession(session, connectionInfo: connectionInfo)
-                
-                // 启动新连接
-                DispatchQueue.main.async {
-                    // 发送通知来触发连接，由 MainContentView 处理
-                    NotificationCenter.default.post(
-                        name: Notification.Name("StartSchemeConnection"),
-                        object: nil,
-                        userInfo: ["session": session]
-                    )
-                }
-            }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .startSchemeConnection,
+                object: nil,
+                userInfo: ["session": session]
+            )
         }
     }
     
