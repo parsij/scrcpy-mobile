@@ -464,11 +464,12 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
         // 如果当前状态不是 Disconnected，先断开现有连接
         if connectionStatus != ScrcpyStatusDisconnected {
             print("🔄 [SessionConnectionManager] Current status is \(connectionStatus.description), disconnecting first")
-            disconnectCurrent()
-            
-            // 等待断开完成后再开始新连接
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.performConnection(to: session, statusCallback: statusCallback, errorCallback: errorCallback)
+            disconnectCurrent { [weak self] in
+                // Only reconnect once Android's previous rotation is restored
+                // and the previous ADB client has started shutting down.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self?.performConnection(to: session, statusCallback: statusCallback, errorCallback: errorCallback)
+                }
             }
         } else {
             // 直接开始连接
@@ -883,13 +884,19 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     
     /// 断开当前连接
     func disconnectCurrent() {
+        disconnectCurrent(completion: {})
+    }
+
+    private func disconnectCurrent(completion: @escaping () -> Void) {
         guard connectionStatus != ScrcpyStatusDisconnected else {
             print("🚫 [SessionConnectionManager] Already disconnected, no action needed")
+            completion()
             return
         }
         // Wait for restoration before closing the ADB connection.
         IPhoneOrientationSync.shared.stop { [weak self] in
             self?.finishDisconnectCurrent()
+            completion()
         }
     }
 
