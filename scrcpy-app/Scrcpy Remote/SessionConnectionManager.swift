@@ -125,6 +125,10 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     
     /// Scrcpy 客户端包装器实例，用于直接管理连接
     private var scrcpyClientWrapper: ScrcpyClientWrapper?
+
+    // Invalidates asynchronous cleanup from a previous connection, even if
+    // the same saved session is reconnected before cleanup finishes.
+    private var connectionInstanceID = UUID()
     
     /// 后台断开连接计时器
     private var backgroundDisconnectTimer: Timer?
@@ -725,6 +729,7 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     ///   - session: 会话模型
     ///   - connectionInfo: 连接信息（包含实际的 host 和 port）
     func setCurrentSession(_ session: ScrcpySessionModel, connectionInfo: NetworkConnectionInfo?) {
+        connectionInstanceID = UUID()
         currentSession = session
         
         // 清除连接中的会话信息，因为现在已经设置为当前会话
@@ -755,14 +760,15 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     func clearCurrentSession(clearPendingAction: Bool = true) {
         // Give the orientation controller a chance to restore Android before
         // releasing the ADB client / Tailscale forward on an unexpected exit.
-        let endingSessionID = currentSession?.id
+        let endingConnectionID = connectionInstanceID
         IPhoneOrientationSync.shared.stop { [weak self] in
-            guard let self = self, self.currentSession?.id == endingSessionID else { return }
+            guard let self = self, self.connectionInstanceID == endingConnectionID else { return }
             self.finishClearCurrentSession(clearPendingAction: clearPendingAction)
         }
     }
 
     private func finishClearCurrentSession(clearPendingAction: Bool) {
+        connectionInstanceID = UUID() // Invalidate any duplicate disconnect callback.
         let wasConnected = currentSession != nil
         let previousHost = actualHost
         let previousPort = actualPort
