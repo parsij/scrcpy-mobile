@@ -752,8 +752,16 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
     
     /// 清除当前会话信息
     func clearCurrentSession(clearPendingAction: Bool = true) {
-        // Best-effort restoration for unexpected disconnects.
-        IPhoneOrientationSync.shared.stop()
+        // Give the orientation controller a chance to restore Android before
+        // releasing the ADB client / Tailscale forward on an unexpected exit.
+        let endingSessionID = currentSession?.id
+        IPhoneOrientationSync.shared.stop { [weak self] in
+            guard let self = self, self.currentSession?.id == endingSessionID else { return }
+            self.finishClearCurrentSession(clearPendingAction: clearPendingAction)
+        }
+    }
+
+    private func finishClearCurrentSession(clearPendingAction: Bool) {
         let wasConnected = currentSession != nil
         let previousHost = actualHost
         let previousPort = actualPort
