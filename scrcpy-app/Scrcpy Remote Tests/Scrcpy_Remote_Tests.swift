@@ -20,6 +20,16 @@ struct Scrcpy_Remote_Tests {
         #expect(IPhoneOrientationSync.rotation(for: .unknown) == nil)
     }
 
+    @Test func rotationSnapshotParsing() {
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("free\\n") == .automatic)
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("lock 0\\n") == .locked(0))
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("lock 1\\r\\n") == .locked(1))
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("lock 3") == .locked(3))
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("lock 4") == nil)
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("lock foo") == nil)
+        #expect(IPhoneOrientationSync.OriginalRotation.parse("") == nil)
+    }
+
     @Test func iphoneOrientationOptionBackwardsCompatible() throws {
         var options = ADBSessionOptions()
         options.syncIPhoneOrientation = true
