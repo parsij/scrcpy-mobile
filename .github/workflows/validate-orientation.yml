@@ -1,0 +1,43 @@
+name: Validate iPhone orientation sync
+
+on:
+  push:
+    branches:
+      - ci/check-orientation
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse all changed Swift files
+        run: |
+          swiftc -frontend -parse \
+            'scrcpy-app/Scrcpy Remote/IPhoneOrientationSync.swift' \
+            'scrcpy-app/Scrcpy Remote/SessionConnectionManager.swift' \
+            'scrcpy-app/Scrcpy Remote/SessionManager.swift' \
+            'scrcpy-app/Scrcpy Remote/SessionCreateView.swift' \
+            'scrcpy-app/Scrcpy Remote/AppSchemeManagerV2.swift' \
+            'scrcpy-app/Scrcpy Remote Tests/Scrcpy_Remote_Tests.swift'
+
+  ios-typecheck:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Type-check iOS orientation controller against UIKit
+        run: |
+          cat > /tmp/ADBClientShim.swift <<'SWIFT'
+          import Foundation
+          final class ADBClient {
+              static func shared() -> ADBClient { ADBClient() }
+              func executeADBCommandAsync(_ args: [String], callback: @escaping (String?, Int32) -> Void) {}
+          }
+          SWIFT
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun swiftc -target arm64-apple-ios15.0 -sdk "$SDK" -typecheck \
+            -module-name Scrcpy_Remote \
+            /tmp/ADBClientShim.swift \
+            'scrcpy-app/Scrcpy Remote/IPhoneOrientationSync.swift'
