@@ -472,7 +472,13 @@ typealias ActionConfirmationCallback = (ScrcpyAction, @escaping () -> Void) -> V
                 // Only reconnect once Android's previous rotation is restored
                 // and the previous ADB client has started shutting down.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self?.performConnection(to: session, statusCallback: statusCallback, errorCallback: errorCallback)
+                    guard let self = self else { return }
+                    // Disconnect cleanup clears callbacks. Install the new
+                    // session's callbacks only after that cleanup has finished.
+                    self.connectingSession = session
+                    self.currentConnectionCallback = statusCallback
+                    self.currentErrorCallback = errorCallback
+                    self.performConnection(to: session, statusCallback: statusCallback, errorCallback: errorCallback)
                 }
             }
         } else {
