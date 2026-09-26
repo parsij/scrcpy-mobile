@@ -208,8 +208,9 @@ final class IPhoneOrientationSync {
 
             if self.stopping {
                 self.finishStop()
-            } else if code == 0, self.desiredRotation != rotation {
-                // A newer orientation arrived during the in-flight command.
+            } else if self.desiredRotation != rotation {
+                // A newer orientation arrived during the in-flight command;
+                // send it even if the earlier command failed.
                 self.sendIfNeeded()
             }
         }
