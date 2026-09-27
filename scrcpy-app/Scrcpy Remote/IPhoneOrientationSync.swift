@@ -184,7 +184,7 @@ final class IPhoneOrientationSync {
             self.sendIfNeeded()
         }
         pendingChange = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10, execute: work)
     }
 
     private func synchronizeNow(force: Bool) {
